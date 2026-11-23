@@ -18,6 +18,7 @@
 //  flash write of the apply step, which is what otaPauseAudio is for.
 // ============================================================================
 #include <Update.h>
+#include <esp_heap_caps.h>
 #include <LittleFS.h>
 #include <HTTPClient.h>
 
@@ -46,7 +47,11 @@ inline void handleOtaStatus(AsyncWebServerRequest *request) {
              ",\"str\":{\"spooled\":" + (haveStr ? "true" : "false") +
              ",\"bytes\":" + String(haveStr ? (unsigned long)LittleFS.open(OTA_SPOOL_STR, "r").size() : 0UL) + "}" +
              ",\"version\":\"" EVD_FW_VERSION "\"}";
-  sendJson(request, j);
+  // sendJson() lives in EVDRoutes.h, which comes after this file: send it
+  // directly rather than reaching forward.
+  AsyncWebServerResponse *res = request->beginResponse(200, "application/json", j);
+  res->addHeader("Cache-Control", "no-store, max-age=0");
+  request->send(res);
 }
 
 // ---- upload ----------------------------------------------------------------
@@ -106,54 +111,55 @@ static bool otaPushSpoolToStr() {
   if (!strHost.length()) { otaUploadMessage = "no EVDSTR paired"; return false; }
   File f = LittleFS.open(OTA_SPOOL_STR, "r");
   if (!f) { otaUploadMessage = "no STR image spooled"; return false; }
-  size_t size = f.size();
+  const size_t size = f.size();
+  if (size == 0) { f.close(); otaUploadMessage = "spooled STR image is empty"; return false; }
 
-  String boundary = "----EVDCTR" + String(millis());
+  String boundary = "----EVDCTR" + String((unsigned long)millis());
   String head = "--" + boundary + "\r\n"
                 "Content-Disposition: form-data; name=\"update\"; filename=\"evdstr.bin\"\r\n"
                 "Content-Type: application/octet-stream\r\n\r\n";
   String tail = "\r\n--" + boundary + "--\r\n";
-  size_t total = head.length() + size + tail.length();
+  const size_t total = head.length() + size + tail.length();
 
-  HTTPClient http;
-  http.setConnectTimeout(5000);
-  http.setTimeout(60000);
-  if (!http.begin(String("http://") + strHost + "/api/ota/upload")) {
-    f.close(); otaUploadMessage = "cannot reach EVDSTR"; return false;
-  }
-  http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-  http.setTimeout(60000);
-  int code = http.POST((uint8_t *)head.c_str(), head.length());   // chunked start
-  // HTTPClient has no streaming multipart API, so the honest simple path is
-  // to build the body in PSRAM. 2 MB of PSRAM is available on this board.
-  (void)code;
-  http.end();
-
-  // Re-do it in one request from a PSRAM buffer.
+  // One request, one buffer. HTTPClient has no streaming multipart API, so
+  // the body is assembled in PSRAM: a 2 MB image plus its ~200-byte envelope
+  // does not fit in internal DRAM next to the HTTP and audio stacks.
   uint8_t *buf = (uint8_t *)heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
   if (!buf) { f.close(); otaUploadMessage = "PSRAM alloc failed"; return false; }
   memcpy(buf, head.c_str(), head.length());
-  f.read(buf + head.length(), size);
-  memcpy(buf + head.length() + size, tail.c_str(), tail.length());
+  size_t got = f.read(buf + head.length(), size);
   f.close();
+  if (got != size) {
+    heap_caps_free(buf);
+    otaUploadMessage = "short read from the spool";
+    return false;
+  }
+  memcpy(buf + head.length() + size, tail.c_str(), tail.length());
 
   bool ok = false;
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(120000);            // a 2 MB POST over WiFi takes a while
   if (http.begin(String("http://") + strHost + "/api/ota/upload")) {
     http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-    http.setTimeout(60000);
     int c = http.POST(buf, total);
     ok = (c == 200);
-    if (!ok) otaUploadMessage = "EVDSTR upload returned " + String(c);
+    otaUploadMessage = ok ? "EVDSTR accepted the image"
+                          : ("EVDSTR upload returned " + String(c));
     http.end();
+  } else {
+    otaUploadMessage = "cannot reach EVDSTR";
   }
   heap_caps_free(buf);
   if (!ok) return false;
 
-  // Tell STR to flash it and restart.
+  // STR restarts itself inside its upload handler once Update.end() succeeds,
+  // so /api/ota/apply is a courtesy ack, not a requirement. Its reply may
+  // never arrive because the board is already rebooting.
   String out; int c2 = 0;
   downlinkRequest("POST", "/api/ota/apply", "{\"target\":\"str\"}", out, c2);
-  otaUploadMessage = "EVDSTR update pushed";
-  return c2 == 200;
+  otaUploadMessage = "EVDSTR update pushed, board restarting";
+  return true;
 }
 
 inline void handleOtaApply(AsyncWebServerRequest *request) {

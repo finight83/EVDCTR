@@ -49,6 +49,7 @@ inline void serviceDeferredSettingsFlush() {
   if (millis() - settingsDirtySince < NVM_SAVE_DELAY_MS) return;
   settingsDirty = false;
   saveWiFiSettings();
+  saveDownlinkSettings();     // the EVDSTR pairing address
 }
 
 // ---- Factory reset ---------------------------------------------------------

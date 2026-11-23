@@ -135,6 +135,9 @@
 #include <HardwareSerial.h>
 #include "opus.h"
 #include "EVDLink.h"
+// The dashboard is a PROGMEM gzip blob generated from EVDCTRL.h by gen_gz.py.
+// It must be visible to EVDRoutes.h, which serves it.
+#include "EVDCTRL_GZ.h"
 
 // ---- Pin assignments -------------------------------------------------------
 static const int pinBtLrc     = 15;
@@ -241,11 +244,26 @@ struct EncodeFrame {
 };
 
 // ---- Forward declarations --------------------------------------------------
-inline void loadZonesFromNVS();          // kept for API compat: no-op here
+// Zones live on EVDSTR (EVDPlayers.h there). This board only relays zone
+// requests, so it has no zone table and no zone persistence at all.
 inline void configureQuietFilters();
 inline void applyQuietFilter(int16_t *buf, uint32_t frames);
 inline void setup_opus(uint32_t sampleRate);
 inline void setup_queues_and_tasks();
+// Defined further down the include chain; declared here because headers
+// earlier in the chain call them from comments/handlers.
+inline void serviceDiscovery();
+inline void serviceReceiverLink();
+inline void serviceUsbAudio();
+inline void pollUsbAudioEvents();
+inline void serviceVolumePot();
+inline void saveWiFiSettings();
+inline void loadWiFiSettings();
+// saveDownlinkSettings()/loadDownlinkSettings() are defined in EVDDownlink.h.
+inline void refreshDownlinkCache();
+inline void initDlna();
+inline bool setupLinkSpi();
+inline bool setup_i2s_in();
 
 // ============================================================================
 //  Headers
@@ -257,6 +275,8 @@ inline void setup_queues_and_tasks();
 #include "EVDDownlink.h"
 #include "EVDAudio.h"
 #include "EVDDLNA.h"
+#include "EVDUart.h"    // the source board's UART grammar
 #include "EVDUsb.h"
+#include "EVDOTA.h"     // route handlers EVDRoutes.h registers
 #include "EVDRoutes.h"
 #include "EVDMain.h"

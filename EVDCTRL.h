@@ -47,6 +47,26 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
   .row>*{flex:1 1 auto}
   .muted{color:var(--muted)}
   .num{font-variant-numeric:tabular-nums}
+  .card.wide{grid-column:1/-1}
+  .linkrow{display:flex;flex-wrap:wrap;gap:10px}
+  .linkbox{flex:1 1 110px;background:#09090c;border:1px solid var(--line);
+           border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+  .linkbox b{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
+             color:var(--muted);font-weight:600}
+  .linkbox span{font-size:1.15rem;font-weight:800}
+  .linkbox.good span{color:var(--good)} .linkbox.bad span{color:var(--bad)}
+  .linkbox.warn span{color:var(--warn)}
+  #spark{width:100%;margin-top:14px;background:#09090c;border:1px solid var(--line);
+         border-radius:10px}
+  .legend{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:.78rem;
+          color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .dot.good{background:var(--good)} .dot.warn{background:var(--warn)}
+  .dot.bad{background:var(--bad)}
+  .diag{margin-top:12px;font-size:.85rem;padding:10px 12px;border-radius:10px;
+        border:1px solid var(--line);background:#0d0d12}
+  .diag.ok{border-color:#1f5b45} .diag.bad{border-color:#5b1f1f}
+  .diag.warn{border-color:#5b4a1f}
 </style>
 </head>
 <body>
@@ -130,7 +150,27 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
   </section>
 
   <section id="t-stream">
-    <div class="grid">
+    <!-- Live pin-link monitor. This is the one thing the split added that a
+         single board could not show: whether frames are actually crossing
+         the four wires, and whether EVDSTR is taking them. -->
+    <div class="card wide">
+      <h3>Pin link &mdash; live</h3>
+      <div class="linkrow">
+        <div class="linkbox" id="lb-health"><b>link</b><span id="lv-health">?</span></div>
+        <div class="linkbox"><b>frames sent</b><span id="lv-sent" class="num">-</span></div>
+        <div class="linkbox"><b>fps</b><span id="lv-fps" class="num">-</span></div>
+        <div class="linkbox"><b>last frame</b><span id="lv-age" class="num">-</span></div>
+        <div class="linkbox"><b>dropped</b><span id="lv-drop" class="num">-</span></div>
+        <div class="linkbox"><b>CS timeouts</b><span id="lv-cs" class="num">-</span></div>
+        <div class="linkbox"><b>wire time</b><span id="lv-wire" class="num">-</span></div>
+      </div>
+      <canvas id="spark" height="72"></canvas>
+      <div class="legend"><span class="dot good"></span>frames/s over the last 2 min
+        <span class="muted" id="sparknote"></span></div>
+      <div class="diag" id="diag"></div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
       <div class="card">
         <h3>EVDSTR address</h3>
         <p class="muted">Audio leaves this board over the pin link. Everything that
@@ -143,6 +183,7 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
         </div>
         <div id="pairstat" class="muted" style="margin-top:8px"></div>
       </div>
+      <div class="card"><h3>Stream state (from EVDSTR)</h3><div id="strlive"></div></div>
       <div class="card"><h3>Players</h3><pre id="players">-</pre></div>
       <div class="card"><h3>Zones</h3><pre id="zones">-</pre></div>
       <div class="card">
@@ -256,6 +297,7 @@ async function tick() {
     'Pacer late': (d.pacerLateMs ?? '-') + ' ms',
     Version: d.strVersion || '-'
   });
+  updateLink(s, d);
   $('#mem').innerHTML = kv({
     'Heap free': (s.heapFree / 1024).toFixed(1) + ' KB',
     'Heap min': (s.heapMinFree / 1024).toFixed(1) + ' KB',
@@ -271,6 +313,110 @@ async function tick() {
     $('#log');
     window.__stats = st;
   }
+}
+
+// ---- Pin link monitor (Stream tab) ----
+// Frames actually crossing the four wires, sampled once per tick. The rate is
+// the honest one -- a delta of the encoder's own success counter -- so a link
+// that is "up" but slow shows up as 12 fps, not as a green pill.
+const SPARK_N = 60;              // 60 samples x 2 s = 2 min
+const spark = [];                // frames/s history
+let lastSent = null, lastSentAt = 0;
+
+function updateLink(s, d) {
+  const sent = s.linkSent || 0;
+  const now = performance.now();
+  let fps = null;
+  if (lastSent !== null && now - lastSentAt > 500) {
+    fps = (sent - lastSent) * 1000 / (now - lastSentAt);
+    lastSentAt = now;
+  }
+  if (lastSent === null) lastSentAt = now;
+  lastSent = sent;
+
+  const healthy = !!s.linkHealthy;
+  const hb = $('#lb-health');
+  hb.className = 'linkbox ' + (healthy ? 'good' : 'bad');
+  $('#lv-health').textContent = healthy ? 'up' : 'DOWN';
+  $('#lv-sent').textContent = sent;
+  $('#lv-drop').textContent = s.linkDropped || 0;
+  $('#lv-cs').textContent = s.linkCsTimeouts || 0;
+
+  if (fps !== null) {
+    spark.push(fps);
+    if (spark.length > SPARK_N) spark.shift();
+  }
+  $('#lv-fps').textContent = fps === null ? '-' : fps.toFixed(1);
+
+  // "last frame" is derived from the sent counter, not from a server clock:
+  // the counter stops moving the instant the encoder stops handing frames over.
+  $('#lv-age').textContent = healthy ? 'now' : (fps === 0 ? '>' + ((s.linkDropped|0) ? 'gap' : '?') : '?');
+  $('#lv-wire').textContent = s.linkLastFrameUs ? (s.linkLastFrameUs / 1000).toFixed(2) + ' ms' : '-';
+
+  drawSpark();
+
+  // One line of diagnosis, in the order a person would check them.
+  const diag = $('#diag');
+  let cls = 'ok', msg = 'Frames are crossing the link and EVDSTR is clocking them.';
+  if (!healthy && (s.linkCsTimeouts || 0) > 0) {
+    cls = 'bad';
+    msg = 'EVDSTR is not clocking: check that it is powered and flashed, that ' +
+          'GPIO11/12/13/14 match on both boards, and that a ground wire runs ' +
+          'between them. CS timeouts count frames that were offered and refused.';
+  } else if (!healthy && (s.linkDropped || 0) > 0 && !(s.linkCsTimeouts || 0)) {
+    cls = 'warn';
+    msg = 'Frames are timing out after the transfer started. The link is wired ' +
+          'but EVDSTR is not finishing the frame - a long or noisy ribbon, or a ' +
+          'slave task being starved.';
+  } else if (!healthy) {
+    cls = 'warn';
+    msg = 'No frame has crossed yet. Start audio (a source selected, not muted, ' +
+          'mode not off) and watch this line.';
+  } else if (d && d.paired && d.cached && (d.subscribers || 0) === 0) {
+    cls = 'warn';
+    msg = 'The link is healthy but EVDSTR has no players. Check that the players ' +
+          'point at EVDSTR, not at this board.';
+  }
+  diag.className = 'diag ' + cls;
+  diag.textContent = msg;
+
+  // The link panel is also fed by /api/link/state, which carries the pin-link
+  // counters the Stream tab's monitor needs even when /api/state is trimmed.
+  j('/api/link/state').then(l => { if (!l.raw) window.__link = l; });
+
+  if (d) {
+    $('#strlive').innerHTML = kv({
+      'EVDSTR': d.paired ? (d.strIp || d.host) : 'not paired',
+      'Cached': d.cached ? 'yes' : 'no',
+      Subscribers: d.subscribers ?? '-',
+      'Queue': (d.queueDepth ?? '-') + ' / ' + (d.queueTarget ?? '-'),
+      'Pacer late': (d.pacerLateMs ?? '-') + ' ms',
+      Version: d.strVersion || '-'
+    });
+  }
+}
+
+function drawSpark() {
+  const c = $('#spark');
+  const w = c.clientWidth || 600, h = c.height;
+  if (c.width !== w) c.width = w;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  // 50 fps reference line
+  g.strokeStyle = '#2a2a34'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, h * 0.25); g.lineTo(w, h * 0.25); g.stroke();
+  if (spark.length < 2) { $('#sparknote').textContent = 'collecting...'; return; }
+  $('#sparknote').textContent = 'peak ' + Math.max(...spark).toFixed(0) + ' fps';
+  const step = w / (SPARK_N - 1);
+  const y = v => h - Math.min(v / 60, 1) * (h - 4) - 2;
+  g.strokeStyle = '#37dba0'; g.lineWidth = 2; g.beginPath();
+  spark.forEach((v, i) => {
+    const x = (SPARK_N - spark.length + i) * step;
+    if (i === 0) g.moveTo(x, y(v)); else g.lineTo(x, y(v));
+  });
+  g.stroke();
+  g.fillStyle = 'rgba(55,219,160,.12)';
+  g.lineTo(w, h); g.lineTo((SPARK_N - spark.length) * step, h); g.closePath(); g.fill();
 }
 
 // ---- Audio tab ----

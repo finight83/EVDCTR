@@ -14,8 +14,17 @@
 // ============================================================================
 #include <esp_heap_caps.h>
 
+// The USB device stack is an optional library. On a board without it the
+// functions below become no-ops, so the firmware still builds and the other
+// inputs (I2S, DLNA) still work.
 #if EVD_HAS_USB_DEVICE_LIB
+#if __has_include(<EspUsbDevice.h>)
 #include <EspUsbDevice.h>
+#else
+#undef EVD_HAS_USB_DEVICE_LIB
+#define EVD_HAS_USB_DEVICE_LIB 0
+#pragma message("EVDCTR: EspUsbDevice.h not found, USB input disabled")
+#endif
 #endif
 
 volatile int32_t gUsbHostVolumeDb256 = 0;

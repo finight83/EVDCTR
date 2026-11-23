@@ -104,6 +104,7 @@ volatile uint32_t statLinkSent        = 0;
 volatile uint32_t statLinkDropped     = 0;
 volatile uint32_t statLinkCsTimeouts  = 0;
 volatile uint32_t statLinkSilence     = 0;
+volatile uint32_t statLinkLastFrameUs = 0;   // wire time of the last good frame
 volatile bool     gLinkHealthy        = false;
 volatile uint32_t gLinkLastOkMs       = 0;
 

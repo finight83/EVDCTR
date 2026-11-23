@@ -215,13 +215,19 @@ inline void handleLinkPair(AsyncWebServerRequest *request, uint8_t *data,
                   "{\"ok\":false,\"error\":\"no EVDSTR answered at that address\"}");
     return;
   }
-  saveDownlinkSettings();
+  // saveDownlinkSettings() is declared in EVDMain.h (it opens NVS, which is a
+  // loop()-side job on this board). Mark it dirty instead of writing here.
+  settingsDirty      = true;
+  settingsDirtySince = millis();
   request->send(200, "application/json",
                 "{\"ok\":true,\"host\":\"" + jsonEscape(strHost) + "\"}");
 }
 
+// The Stream tab polls this, so it must be cheap. refreshDownlinkCache() is a
+// blocking GET to EVDSTR with a 2.5 s timeout; loop() already refreshes the
+// cache every 2 s, so this handler reports what the cache holds instead of
+// asking again and stalling the HTTP worker the dashboard is talking to.
 inline void handleLinkState(AsyncWebServerRequest *request) {
-  refreshDownlinkCache();
   String json = String("{\"paired\":") + (strHost.length() ? "true" : "false") +
                 ",\"host\":\"" + jsonEscape(strHost) + "\"" +
                 ",\"cached\":" + (gDownlinkCache.valid ? "true" : "false") +
@@ -236,6 +242,8 @@ inline void handleLinkState(AsyncWebServerRequest *request) {
                 ",\"linkDropped\":" + String((unsigned long)statLinkDropped) +
                 ",\"linkCsTimeouts\":" + String((unsigned long)statLinkCsTimeouts) +
                 ",\"linkSilence\":" + String((unsigned long)statLinkSilence) +
+                ",\"linkLastFrameUs\":" + String((unsigned long)statLinkLastFrameUs) +
+                ",\"linkLastOkMs\":" + String((unsigned long)gLinkLastOkMs) +
                 ",\"linkHealthy\":" + (gLinkHealthy ? "true" : "false") + "}";
   request->send(200, "application/json", json);
 }

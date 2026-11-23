@@ -29,6 +29,10 @@ inline void setupReceiverLink() {
 // that keeps a captured trace readable.
 inline bool bridgeSendReceiverCmd(const String &cmd, String &respBody,
                                   uint16_t &httpCode) {
+  // Callers pass both the bare command ("next") and the wire form
+  // ("CMD:next" / "SRC:BT" / "KICK_BT"). Only add the CMD: prefix when the
+  // caller did not already give a verb: "CMD:SRC:BT" is not a command the
+  // source board knows.
   if (!receiverUart) {
     httpCode = 503;
     respBody = "{\"ok\":false,\"error\":\"UART unavailable\"}";
@@ -39,10 +43,14 @@ inline bool bridgeSendReceiverCmd(const String &cmd, String &respBody,
     respBody = "{\"ok\":false,\"error\":\"UART busy\"}";
     return false;
   }
-  receiverUart->printf("CMD:%s\n", cmd.c_str());
+  const bool hasVerb = cmd.startsWith("CMD:") || cmd.startsWith("SRC:") ||
+                       cmd.startsWith("KICK_BT") || cmd.startsWith("GET_BT") ||
+                       cmd.startsWith("REMOVE_BT");
+  String wire = hasVerb ? cmd : (String("CMD:") + cmd);
+  receiverUart->printf("%s\n", wire.c_str());
   unlockFor(uartMutex);
   httpCode = 200;
-  respBody = String("{\"ok\":true,\"cmd\":\"") + cmd + "\",\"transport\":\"uart\"}";
+  respBody = String("{\"ok\":true,\"cmd\":\"") + wire + "\",\"transport\":\"uart\"}";
   return true;
 }
 

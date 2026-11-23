@@ -37,8 +37,12 @@
 // ============================================================================
 #include <ESPAsyncWebServer.h>
 #include <Update.h>
-#include "EVDOTA.h"
 
+// EVDOTA.h is included by EVDCTR.ino before this file: it defines globals, so
+// a second include would be a redefinition. Declare its entry point instead.
+inline void setupOtaRoutes();
+
+// The one server instance for this board.
 AsyncWebServer server(80);
 
 // ---- helpers ---------------------------------------------------------------
@@ -82,6 +86,8 @@ inline void handleApiState(AsyncWebServerRequest *request) {
   j += "\"linkSent\":" + String((unsigned long)statLinkSent) + ",";
   j += "\"linkDropped\":" + String((unsigned long)statLinkDropped) + ",";
   j += "\"linkCsTimeouts\":" + String((unsigned long)statLinkCsTimeouts) + ",";
+  j += "\"linkLastFrameUs\":" + String((unsigned long)statLinkLastFrameUs) + ",";
+  j += "\"linkLastOkMs\":" + String((unsigned long)gLinkLastOkMs) + ",";
   j += "\"dlnaPlaying\":" + String(dlnaPlaying ? "true" : "false") + ",";
   j += "\"usbStreaming\":" + String(gUsbStreaming ? "true" : "false") + ",";
   // Downlink summary: what STR said last time we asked.
@@ -362,6 +368,9 @@ inline void handleApiConfigRelay(AsyncWebServerRequest *request,
 }
 
 // ---- setup -----------------------------------------------------------------
+// The one server instance for this board. Declared here because everything
+// above this line only defines handlers, and one of them (setupOtaRoutes in
+// EVDOTA.h) is registered below.
 inline void setup_http_server() {
   // ---- dashboard ----
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {

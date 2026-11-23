@@ -623,6 +623,8 @@ inline void audioEncodeTask(void *) {
       statLinkSent = gLinkFramesSent;
       gLinkLastOkMs = millis();
       gLinkHealthy  = true;
+      // Published for the Stream tab: how long the SPI transfer itself took.
+      statLinkLastFrameUs = gLinkLastFrameUs;
     } else {
       statOpusDropped++;
       statLinkDropped = gLinkFramesDropped;
