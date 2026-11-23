@@ -400,3 +400,63 @@ function calls. Both trees report 0.
 |---|---|---|---|
 | EVDCTR | 1 454 191 B | 8% | 95 452 B (29%) |
 | EVDSTR | 1 238 303 B | 7% | 66 380 B (20%) |
+
+---
+
+## 9. USB audio ported to EspUsbDevice 3.x
+
+`EVDUsb.h` was a stub that called `setVid()`, `begin()` and `connected()` on
+`EspUsbDevice` - methods that never existed. It could not compile, so USB was
+compiled out and the source selector answered 501. It is now a real port.
+
+### The library changed under the old code
+
+EspUsbDevice **3.x is a rewrite**, not an evolution. The old block in
+`srv_EVDUsb.h` targets 2.x, and every one of these is different now:
+
+| 2.x | 3.x |
+|---|---|
+| `CFG_TUD_*` build flags size the buffers | `configure()` sizes them at run time |
+| `device.task()` called from `loop()` | the library runs its own worker task |
+| `audio.begin()` / function `begin()` | only `device.begin()`; a Function's is private |
+| buffers reserved at link time | allocated in `begin()`, freed in `end()` |
+| `ready()` | `started()`, `ready()`, `suspended()`, `speed()` |
+
+Order matters and is enforced: **declare -> `addFormat()` -> `configure()` ->
+`device.begin()`**. `addFormat()` and `configure()` are refused while running,
+and the Feature Unit accessors (`hasVolume`, `getVolumeRange`, ...) are only
+valid after `begin()` has built the audio graph.
+
+### What the port does
+
+- UAC1 **playback** (host -> device), 48 kHz / 16-bit / stereo - the same rate
+  as the I2S path, so the resampler ratio downstream stays valid.
+- 960-frame ring (20 ms), `DropOldest`: for a live input, stale audio is worse
+  than a gap.
+- `addFormat()`'s return value is **checked** - it is false for a shape whose
+  packet would exceed the 1023-byte full-speed limit, which is the one failure
+  that otherwise shows up only as silence.
+- `begin()` failure logs `device.lastErrorName()`, which distinguishes
+  `ESP_ERR_INVALID_SIZE` (endpoints/FIFO do not fit) from
+  `ESP_ERR_INVALID_STATE` (wrong USB mode - needs USB-OTG/TinyUSB).
+- The host's volume/mute is **applied here**: the library reports it as events
+  and never touches the PCM, so without this the Windows slider would be inert.
+  Start at -20 dB, not full scale.
+- `stopServerUsbAudio()` takes the lock with a 500 ms bound and, on timeout,
+  leaves the device up rather than calling `end()` under an in-flight `read()`.
+
+### What the dashboard shows
+
+`/api/state` gained `usbHostVolumeDb`, `usbHostMuted` and `usbError`. The
+capture panel reads `waiting for host (begin_failed)` instead of a bare `-`
+when the source is USB but no PCM is arriving, and shows the host's volume.
+
+### Build
+
+EVDCTR 1 488 411 B (8% of 16 MB), RAM 114 604 B (34%). The USB stack costs
+about 36 KB of flash and 19 KB of static RAM.
+
+**Board settings that matter:** `USBMode=default` (USB-OTG / TinyUSB), *not*
+Hardware CDC and JTAG - the library owns the OTG controller and cannot coexist
+with the core's `USB.begin()`. D- is GPIO19, D+ is GPIO20: the second USB-C
+port on the board, the one not labelled UART.

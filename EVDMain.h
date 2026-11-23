@@ -148,6 +148,10 @@ void setup() {
     LOGE("I2S input unavailable; USB/DLNA inputs still work");
   }
 
+  // Before setup_queues_and_tasks(): audioReadTask exists from that call on,
+  // and the USB lifecycle mutex must exist before anything can take it.
+  initUsbLifecycle();
+
   setup_queues_and_tasks();
 
   LOGI("boot complete: http://%s/  (pair EVDSTR on the Stream tab)",

@@ -90,6 +90,11 @@ inline void handleApiState(AsyncWebServerRequest *request) {
   j += "\"linkLastOkMs\":" + String((unsigned long)gLinkLastOkMs) + ",";
   j += "\"dlnaPlaying\":" + String(dlnaPlaying ? "true" : "false") + ",";
   j += "\"usbStreaming\":" + String(gUsbStreaming ? "true" : "false") + ",";
+  // USB diagnostics: what the host's Feature Unit last said, and why a start
+  // failed if it did. Empty string when nothing has gone wrong.
+  j += "\"usbHostVolumeDb\":" + String((float)gUsbHostVolumeDb256 / 256.0f, 1) + ",";
+  j += "\"usbHostMuted\":" + String(gUsbHostMuted ? "true" : "false") + ",";
+  j += "\"usbError\":\"" + String(usbLastError()) + "\",";
   // Downlink summary: what STR said last time we asked.
   // Auto-pairing state: the Stream panel shows "searching" while unpaired
   // instead of an empty address with no explanation.
@@ -280,7 +285,16 @@ inline void handleApiSourceBridge(AsyncWebServerRequest *request,
                     "{\"ok\":false,\"error\":\"USB input not built into this firmware\"}");
       return;
     }
-    startServerUsbAudio();
+    if (!startServerUsbAudio()) {
+      // The library's reason, not a generic failure: "begin_failed" means the
+      // USB mode is wrong, "format_failed" means the descriptor could not carry
+      // the rate, "mutex_missing" means setup() was not called.
+      String e = String(usbLastError());
+      LOGE("USB source refused: %s", e.c_str());
+      request->send(500, "application/json",
+                    "{\"ok\":false,\"error\":\"USB start failed: " + e + "\"}");
+      return;
+    }
     serverInputSource = SRC_FROM_USB;
   } else {
     stopServerUsbAudio();

@@ -212,9 +212,9 @@ static_assert(OPUS_MAX_PACKET_BYTES == LINK_MAX_PAYLOAD,
 #define PENDING_MAX_FRAMES 4096
 
 // ---- USB Audio Class -------------------------------------------------------
-// 0 until EVDUsb.h is ported to the real EspUsbDevice API (see that file).
-// The "USB" input on the dashboard is reported as unavailable while this is 0.
-#define EVD_HAS_USB_DEVICE_LIB 0
+// EVDUsb.h targets EspUsbDevice 3.x (see that file). __has_include there
+// downgrades this to 0 if the library is missing, so the firmware still builds.
+#define EVD_HAS_USB_DEVICE_LIB 1
 // Readable as a value at runtime, so a handler can refuse without #if inside a
 // function body.
 #define EVD_USB_INPUT_BUILT (EVD_HAS_USB_DEVICE_LIB != 0)

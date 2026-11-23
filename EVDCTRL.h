@@ -277,7 +277,10 @@ async function tick() {
   $('#cap').innerHTML = kv({
     Source: s.source, Mode: s.mode, Volume: s.volume + (s.muted ? ' (muted)' : ''),
     'Source rate': (s.sourceSampleRate / 1000).toFixed(1) + ' kHz',
-    DLNA: s.dlnaPlaying ? 'playing' : '-', USB: s.usbStreaming ? 'streaming' : '-',
+    DLNA: s.dlnaPlaying ? 'playing' : '-',
+    USB: s.usbStreaming ? 'streaming'
+         : (s.source === 'USB' ? ('waiting for host' + (s.usbError ? ' (' + s.usbError + ')' : '')) : '-'),
+    'USB host vol': s.usbHostMuted ? 'muted' : (s.usbHostVolumeDb + ' dB'),
     Uptime: Math.floor(s.upMs / 1000) + ' s'
   });
   $('#enc').innerHTML = kv({
