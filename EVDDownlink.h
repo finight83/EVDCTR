@@ -210,6 +210,8 @@ inline void handleLinkPair(AsyncWebServerRequest *request, uint8_t *data,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
+  // Parse and read the field while the buffer is alive: releaseReqBody() frees
+  // the memory `body` points at.
   bool parsed = !deserializeJson(in, body, bodyLen) && in["host"].is<const char*>();
   releaseReqBody(request);   // body copied into in
   if (!parsed) {

@@ -44,7 +44,10 @@ class ResamplerToOpusRate {
       memcpy(out, in, n * CHANNELS * sizeof(int16_t));
       return n;
     }
-    if (!primed_ && inFrames >= 2) {
+    // Down-sampling needs a 4-tap window (i-1 .. i+2), so a single-frame chunk
+    // would index in[i+1] out of bounds. Nothing to do with no output possible.
+    if (inFrames < 2) return 0;
+    if (!primed_) {
       last_[0] = in[0]; last_[1] = in[1];
       prev_[0] = in[0]; prev_[1] = in[1];
       primed_ = true;
@@ -546,7 +549,24 @@ inline void audioEncodeTask(void *) {
       }
       continue;
     }
-    if (ef.samples != g_opusFrameSamples) continue;   // stale frame after re-create
+    // A frame produced under the OLD frame size (the other sample rate) must be
+    // discarded, and on its own it would be: the encode queue is drained by
+    // handleEncoderRecreate(). But a producer that keeps emitting the old size
+    // (a stuck g_opusFrameSamples, a re-create that never took) would make this
+    // `continue` swallow EVERY frame forever, silently, with the link "up" and
+    // the players hearing nothing. Say so instead of dropping quietly.
+    if (ef.samples != g_opusFrameSamples) {
+      static unsigned long lastMismatch = 0;
+      unsigned long now = millis();
+      if (now - lastMismatch > 2000) {
+        lastMismatch = now;
+        LOGE("encode: frame of %u samples, encoder expects %u - dropped "
+             "(stale producer?)", (unsigned)ef.samples,
+             (unsigned)g_opusFrameSamples);
+      }
+      statOpusDropped++;
+      continue;
+    }
 
     if (g_pendingComplexity >= 0) {
       int c = g_pendingComplexity;

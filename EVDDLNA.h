@@ -102,6 +102,78 @@ inline void dlnaSsdpTaskFn(void *) {
   }
 }
 
+// ---- WAV header ------------------------------------------------------------
+// Parses as much of the RIFF header as has arrived and returns the number of
+// bytes to discard before the PCM. Sets g_sourceSampleRate so the stage-1
+// resampler matches the file instead of assuming 48 kHz.
+//
+// Chunk walking, not a fixed 44: `fmt ` may be followed by LIST/fact/bext
+// chunks before `data`, which is exactly what every encoder that writes
+// metadata produces.
+struct DlnaWav {
+  uint32_t skip   = 0;
+  uint16_t format = 0;
+  uint16_t channels = 0;
+  uint16_t bits   = 0;
+  uint32_t rate   = 0;
+  bool     ok     = false;
+};
+static DlnaWav dlnaWav;
+static uint32_t dlnaWavSkip = 0;
+static bool     dlnaWavMono = false;
+
+inline bool parseWavHeader(const uint8_t *b, int n) {
+  dlnaWav = DlnaWav();
+  if (n < 12) return false;
+  if (memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return false;
+
+  uint32_t pos = 12;
+  bool haveFmt = false, haveData = false;
+  while (pos + 8 <= (uint32_t)n) {
+    uint32_t len = (uint32_t)b[pos + 4] | ((uint32_t)b[pos + 5] << 8) |
+                   ((uint32_t)b[pos + 6] << 16) | ((uint32_t)b[pos + 7] << 24);
+    if (memcmp(b + pos, "fmt ", 4) == 0) {
+      // The 16 bytes that matter may straddle the end of this segment. Ask for
+      // more instead of reporting "not a WAV".
+      if (pos + 8 + 16 > (uint32_t)n) return false;
+      dlnaWav.format   = (uint16_t)(b[pos + 8] | (b[pos + 9] << 8));
+      dlnaWav.channels = (uint16_t)(b[pos + 10] | (b[pos + 11] << 8));
+      dlnaWav.rate     = (uint32_t)b[pos + 12] | ((uint32_t)b[pos + 13] << 8) |
+                         ((uint32_t)b[pos + 14] << 16) | ((uint32_t)b[pos + 15] << 24);
+      dlnaWav.bits     = (uint16_t)(b[pos + 22] | (b[pos + 23] << 8));
+      haveFmt = true;
+    } else if (memcmp(b + pos, "data", 4) == 0) {
+      if (!haveFmt) {
+        // The data chunk precedes fmt (malformed, or fmt straddled a segment).
+        // Refuse rather than guess a rate.
+        return false;
+      }
+      dlnaWav.skip = pos + 8;
+      haveData = true;
+      break;
+    }
+    pos += 8 + len + (len & 1);   // chunks are word-aligned
+    if (len > (uint32_t)n) break; // truncated header in this segment
+  }
+  if (!haveFmt || !haveData) return false;
+  // Only 16-bit PCM. WAVE_FORMAT_EXTENSIBLE (0xFFFE) with 16 bits is PCM too.
+  if (!(dlnaWav.format == 1 || dlnaWav.format == 0xFFFE)) return false;
+  if (dlnaWav.bits != 16 || dlnaWav.channels < 1 || dlnaWav.channels > 2) return false;
+  if (dlnaWav.rate < 8000 || dlnaWav.rate > 192000) return false;
+  if (dlnaWav.rate != g_sourceSampleRate) {
+    LOGI("DLNA: WAV %u Hz %u ch -> resampler", (unsigned)dlnaWav.rate,
+         (unsigned)dlnaWav.channels);
+    g_sourceSampleRate = dlnaWav.rate;
+    g_rateEstimatorNeedsReset = true;
+  }
+  // Mono is widened to stereo by the fetch loop; that keeps the whole
+  // downstream pipeline (which is hard-wired to CHANNELS = 2) unchanged.
+  dlnaWavMono = (dlnaWav.channels == 1);
+  dlnaWavSkip = dlnaWav.skip;
+  dlnaWav.ok = true;
+  return true;
+}
+
 // ---- Fetch -----------------------------------------------------------------
 // Pulls the URI and pushes RawChunk into rawQueue at the natural chunk size.
 // WAV: the 44-byte canonical header is skipped and the fmt block is parsed
@@ -127,8 +199,13 @@ inline void dlnaFetchTaskFn(void *) {
       WiFiClient *stream = http.getStreamPtr();
       static uint8_t buf[I2S_READ_CHUNK_BYTES];
       RawChunk chunk;
-      uint32_t skip = 44;   // canonical WAV header
+      // The 44-byte "canonical" WAV header is a convention, not a guarantee:
+      // encoders add LIST/INFO blocks before `data`, and the file may be
+      // 8/24/32-bit or multichannel. Skipping exactly 44 bytes fed chunk
+      // headers into the encoder as PCM (a burst of noise), and reading the
+      // rate from the header is the only way the resampler can be right.
       bool     headerDone = false;
+      uint32_t headerSkipRemaining = 0;
 
       while (dlnaFetchRunning && stream) {
         if (dlnaPaused) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
@@ -142,20 +219,54 @@ inline void dlnaFetchTaskFn(void *) {
         int got  = stream->read(buf, want);
         if (got <= 0) continue;
 
+        // Finish discarding a header that straddled two segments.
+        if (headerSkipRemaining) {
+          uint32_t drop = (uint32_t)got < headerSkipRemaining
+                          ? (uint32_t)got : headerSkipRemaining;
+          headerSkipRemaining -= drop;
+          got -= (int)drop;
+          if (got <= 0) continue;
+          memmove(buf, buf + drop, (size_t)got);
+        }
+
         int off = 0;
         if (!headerDone) {
-          if ((uint32_t)got <= skip) { skip -= (uint32_t)got; continue; }
-          off = (int)skip;
-          skip = 0;
+          if (got < 12) continue;             // need the RIFF/WAVE magic
+          if (!parseWavHeader(buf, got)) {
+            // Not a WAV we can play: stop loudly rather than stream garbage.
+            LOGE("DLNA: %s is not 16-bit PCM WAV", dlnaCurrentUri.c_str());
+            break;
+          }
+          if (dlnaWavSkip >= (uint32_t)got) {
+            // The header is larger than this first segment. Skipping "44
+            // bytes" unconditionally is what fed LIST-chunk headers into the
+            // encoder as PCM; carry the remainder instead.
+            headerSkipRemaining = dlnaWavSkip - (uint32_t)got;
+            continue;
+          }
+          off = (int)dlnaWavSkip;
           headerDone = true;
         }
         int payload = got - off;
         if (payload <= 0) continue;
-        payload &= ~3;   // whole stereo 16-bit frames only
+        // Whole 16-bit frames: 2 bytes mono, 4 bytes stereo.
+        payload &= dlnaWavMono ? ~1 : ~3;
+        int maxPayload = (int)sizeof(chunk.data);
+        if (dlnaWavMono) maxPayload &= ~3;   // must stay an even frame count
+        if (payload > maxPayload) payload = maxPayload;
 
         chunk.len         = (uint32_t)payload;
         chunk.captured_ms = millis();
-        memcpy(chunk.data, buf + off, payload);
+        if (dlnaWavMono) {
+          // Duplicate each sample into L and R: the pipeline is stereo-only.
+          const int16_t *src = (const int16_t *)(buf + off);
+          int16_t       *dst = (int16_t *)chunk.data;
+          int frames = payload / 2;
+          for (int i = 0; i < frames; ++i) { dst[i * 2] = src[i]; dst[i * 2 + 1] = src[i]; }
+          chunk.len = (uint32_t)(frames * 4);
+        } else {
+          memcpy(chunk.data, buf + off, (size_t)payload);
+        }
         if (xQueueSend(rawQueue, &chunk, pdMS_TO_TICKS(50)) != pdTRUE) {
           statRawDropped++;
         }

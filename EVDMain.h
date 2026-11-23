@@ -64,8 +64,13 @@ inline void serviceFactoryResetPin() {
     if (heldSince == 0) heldSince = millis();
     if (millis() - heldSince > FACTORY_RESET_HOLD_MS) {
       LOGW("factory reset: clearing NVS and restarting");
-      PrefsGuard g("evdctr", false);
-      if (g.ok) g.prefs.clear();
+      // Scoped so the guard's destructor runs: it closes the NVS namespace and
+      // releases prefsMutex. ESP.restart() never returns, so a guard still in
+      // scope would leave the namespace uncommitted and the mutex taken.
+      {
+        PrefsGuard g("evdctr", false);
+        if (g.ok) g.prefs.clear();
+      }
       delay(300);
       ESP.restart();
     }

@@ -189,6 +189,8 @@ inline void handlePostAudioEncoding(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument doc(512);
+  // Judge before releasing: `body` points into the buffer releaseReqBody()
+  // frees, so anything read from it afterwards is a use-after-free.
   bool badBody = (deserializeJson(doc, body, bodyLen) != DeserializationError::Ok);
   releaseReqBody(request);   // doc has its own copy; nothing below reads body
   if (badBody) {
@@ -266,6 +268,7 @@ inline void handleApiSourceBridge(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
+  // Both the parse AND the field check must happen before the release.
   bool parsed = !deserializeJson(in, body, bodyLen) && in["source"].is<const char*>();
   releaseReqBody(request);
   if (!parsed) {
@@ -314,6 +317,7 @@ inline void handleApiCmdBridge(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
+  // Both the parse AND the field check must happen before the release.
   bool parsed = !deserializeJson(in, body, bodyLen) && in["cmd"].is<const char*>();
   releaseReqBody(request);
   if (!parsed) {
@@ -448,7 +452,7 @@ inline void setup_http_server() {
       if (!accumulateReqBody(req, data, len, index, total, 128,
                              "{\"ok\":false}", body, bodyLen)) return;
       DynamicJsonDocument in(64);
-      bool ok = !deserializeJson(in, body, bodyLen);
+      bool ok = !deserializeJson(in, body, bodyLen) && in["level"].is<int>();
       releaseReqBody(req);
       if (ok && in["level"].is<int>()) {
         int l = in["level"].as<int>();
