@@ -91,6 +91,10 @@ inline void handleApiState(AsyncWebServerRequest *request) {
   j += "\"dlnaPlaying\":" + String(dlnaPlaying ? "true" : "false") + ",";
   j += "\"usbStreaming\":" + String(gUsbStreaming ? "true" : "false") + ",";
   // Downlink summary: what STR said last time we asked.
+  // Auto-pairing state: the Stream panel shows "searching" while unpaired
+  // instead of an empty address with no explanation.
+  j += "\"autoPaired\":" + String(gAutoPaired ? "true" : "false") + ",";
+  j += "\"discoveryProbes\":" + String((unsigned long)statDiscoveryProbes) + ",";
   j += "\"downlink\":{\"paired\":" + String(strHost.length() ? "true" : "false") +
        ",\"host\":\"" + jsonEscape(strHost) + "\"" +
        ",\"cached\":" + (gDownlinkCache.valid ? "true" : "false") +

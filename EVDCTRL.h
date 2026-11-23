@@ -269,7 +269,9 @@ async function tick() {
   $('#p-link').textContent = s.linkHealthy ? 'link ok' : 'link DOWN';
   $('#p-link').className = 'pill ' + (s.linkHealthy ? 'ok' : 'bad');
   const d = s.downlink || {};
-  $('#p-str').textContent = d.paired ? ('STR ' + (d.strIp || d.host)) : 'STR unpaired';
+  $('#p-str').textContent = d.paired
+    ? ('STR ' + (d.strIp || d.host) + (s.autoPaired ? ' (auto)' : ''))
+    : 'STR searching\u2026';
   $('#p-str').className = 'pill ' + (d.paired && d.cached ? 'ok' : 'warn');
 
   $('#cap').innerHTML = kv({
@@ -368,6 +370,12 @@ function updateLink(s, d) {
     msg = 'Frames are timing out after the transfer started. The link is wired ' +
           'but EVDSTR is not finishing the frame - a long or noisy ribbon, or a ' +
           'slave task being starved.';
+  } else if (!d || !d.paired) {
+    cls = 'warn';
+    msg = 'No EVDSTR paired yet. This board broadcasts a discovery probe every ' +
+          '3 s (' + (s.discoveryProbes || 0) + ' sent). Both boards must be on the ' +
+          'same LAN with no client isolation between them - guest WiFi blocks ' +
+          'this. You can also pair by hand on the Stream tab.';
   } else if (!healthy) {
     cls = 'warn';
     msg = 'No frame has crossed yet. Start audio (a source selected, not muted, ' +
@@ -387,6 +395,8 @@ function updateLink(s, d) {
   if (d) {
     $('#strlive').innerHTML = kv({
       'EVDSTR': d.paired ? (d.strIp || d.host) : 'not paired',
+      'Paired by': d.paired ? (s.autoPaired ? 'discovery' : 'typed') : '-',
+      'Probes sent': s.discoveryProbes ?? '-',
       'Cached': d.cached ? 'yes' : 'no',
       Subscribers: d.subscribers ?? '-',
       'Queue': (d.queueDepth ?? '-') + ' / ' + (d.queueTarget ?? '-'),

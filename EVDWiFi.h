@@ -330,10 +330,32 @@ inline void handleSaveNetworkSettings(AsyncWebServerRequest *request,
   ESP.restart();
 }
 
-// ---- Discovery responder ---------------------------------------------------
-// Answers the same "ENKELVOUDP/1 DISCOVER" probe the old server answered, so
-// any tooling that looks for an Enkelvoud box still finds one - except that
-// the box it finds is now the *controller*. The reply names both boards.
+// ---- Discovery -------------------------------------------------------------
+// Two directions, one socket:
+//
+//   inbound  any probe ("ENKELVOUDP/1 DISCOVER") is answered with our role, so
+//            EVDSTR and third-party tooling can find this board.
+//   outbound when no EVDSTR is paired, broadcast a probe every DISCOVERY_TX_MS
+//            and take the first reply that says role=str. That is what makes
+//            pairing automatic: flash both boards on the same LAN and they find
+//            each other, no IP typed anywhere.
+//
+// The outbound probe only runs while strHost is empty. Once paired, the stored
+// address is authoritative and a stray board on the network cannot steal it.
+static unsigned long gLastProbeMs = 0;
+static bool          gProbeReplySeen = false;
+// Published for the dashboard: how many probes we have broadcast since boot,
+// and whether auto-pairing is what filled strHost in (vs. typed by an operator).
+volatile uint32_t statDiscoveryProbes = 0;
+volatile bool     gAutoPaired        = false;
+
+// Both live in EVDDownlink.h, which is included after this file because it
+// needs the WiFi state defined here.
+extern String strHost;        // the paired EVDSTR address, defined in EVDDownlink.h
+inline bool isPairableHost(const String &h);
+inline bool downlinkRequest(const String &method, const String &path,
+                            const String &body, String &out, int &outCode);
+
 inline void setupDiscoveryResponder() {
   if (!discoveryUdp.begin(DISCOVERY_PORT)) {
     LOGE("discovery: bind %d failed", DISCOVERY_PORT);
@@ -342,21 +364,81 @@ inline void setupDiscoveryResponder() {
   LOGI("discovery: listening on %d", DISCOVERY_PORT);
 }
 
-inline void serviceDiscovery() {
-  int sz = discoveryUdp.parsePacket();
-  if (sz <= 0) return;
-  char buf[96];
-  int n = discoveryUdp.read(buf, sizeof(buf) - 1);
-  if (n <= 0) return;
-  buf[n] = '\0';
-  if (strncmp(buf, DISCOVERY_MAGIC_REQ, strlen(DISCOVERY_MAGIC_REQ)) != 0) return;
+// Pull "key=value" out of a reply line. Values never contain spaces.
+inline bool discoveryField(const char *line, const char *key, String &out) {
+  String k = String(key) + "=";
+  int at = String(line).indexOf(k);
+  if (at < 0) return false;
+  at += k.length();
+  int end = at;
+  while (line[end] && line[end] != ' ') ++end;
+  if (end == at) return false;
+  out = String(line).substring(at, end);
+  return true;
+}
 
-  String reply = String(DISCOVERY_MAGIC_RPY) + " role=ctr name=" +
-                 sanitizeServerName(serverName) + " ip=" +
-                 WiFi.localIP().toString();
-  discoveryUdp.beginPacket(discoveryUdp.remoteIP(), discoveryUdp.remotePort());
-  discoveryUdp.write((const uint8_t *)reply.c_str(), reply.length());
+inline void sendDiscoveryProbe() {
+  if (!WiFi.isConnected()) return;
+  IPAddress mask = WiFi.subnetMask();
+  IPAddress ip   = WiFi.localIP();
+  // Directed broadcast for our own subnet. 255.255.255.255 is dropped by some
+  // APs and most client isolation rules; the subnet broadcast is the one that
+  // actually arrives.
+  IPAddress bcast((ip[0] | ~mask[0]) & 0xFF, (ip[1] | ~mask[1]) & 0xFF,
+                  (ip[2] | ~mask[2]) & 0xFF, (ip[3] | ~mask[3]) & 0xFF);
+  statDiscoveryProbes++;
+  discoveryUdp.beginPacket(bcast, DISCOVERY_PORT);
+  discoveryUdp.write((const uint8_t *)DISCOVERY_MAGIC_REQ, strlen(DISCOVERY_MAGIC_REQ));
   discoveryUdp.endPacket();
+}
+
+inline void serviceDiscovery() {
+  // --- inbound: answer probes ---------------------------------------------
+  int sz = discoveryUdp.parsePacket();
+  if (sz > 0) {
+    char buf[128];
+    int n = discoveryUdp.read(buf, sizeof(buf) - 1);
+    if (n > 0) {
+      buf[n] = '\0';
+      if (strncmp(buf, DISCOVERY_MAGIC_REQ, strlen(DISCOVERY_MAGIC_REQ)) == 0) {
+        String reply = String(DISCOVERY_MAGIC_RPY) + " role=ctr name=" +
+                       sanitizeServerName(serverName) + " ip=" +
+                       WiFi.localIP().toString();
+        discoveryUdp.beginPacket(discoveryUdp.remoteIP(), discoveryUdp.remotePort());
+        discoveryUdp.write((const uint8_t *)reply.c_str(), reply.length());
+        discoveryUdp.endPacket();
+      } else if (strncmp(buf, DISCOVERY_MAGIC_RPY, strlen(DISCOVERY_MAGIC_RPY)) == 0) {
+        // --- inbound: somebody answered OUR probe ---------------------------
+        String role, host;
+        if (discoveryField(buf, "role", role) && role == "str" &&
+            discoveryField(buf, "ip", host) && isPairableHost(host)) {
+          // Only when unpaired: a stored address is a deliberate choice.
+          if (!strHost.length()) {
+            String out; int code = 0;
+            strHost = host;
+            if (downlinkRequest("GET", "/api/state", "", out, code)) {
+              settingsDirty      = true;
+              settingsDirtySince = millis();
+              gProbeReplySeen    = true;
+              gAutoPaired        = true;
+              LOGI("discovery: paired with EVDSTR at %s (automatic)", host.c_str());
+            } else {
+              // Answered discovery but not HTTP: keep looking rather than
+              // locking onto a half-booted board.
+              strHost = "";
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- outbound: probe while unpaired -------------------------------------
+  if (strHost.length() || !WiFi.isConnected()) return;
+  unsigned long now = millis();
+  if (now - gLastProbeMs < DISCOVERY_TX_MS) return;
+  gLastProbeMs = now;
+  sendDiscoveryProbe();
 }
 
 // ---- Volume potentiometer --------------------------------------------------
