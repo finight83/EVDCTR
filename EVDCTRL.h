@@ -67,6 +67,10 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
         border:1px solid var(--line);background:#0d0d12}
   .diag.ok{border-color:#1f5b45} .diag.bad{border-color:#5b1f1f}
   .diag.warn{border-color:#5b4a1f}
+  /* The error box the script writes into after a failed request. */
+  #err{display:none;margin:0 22px 14px;padding:10px 12px;border-radius:10px;
+       border:1px solid #5b1f1f;background:#1a0d0d;color:#ffb9b9;font-size:.85rem}
+  #err.on{display:block}
 </style>
 </head>
 <body>
@@ -78,6 +82,8 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
   <span class="pill" id="p-str">STR ?</span>
   <span class="pill" id="p-ver">-</span>
 </header>
+
+<div id="err"></div>
 
 <nav>
   <button class="on" data-t="status">Status</button>
@@ -261,6 +267,31 @@ async function j(url, opt) {
 const post = (url, body) => j(url, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
 
+// ---- Error surface ---------------------------------------------------------
+// Every command used to fire and forget: a 500 from the board, an unreachable
+// EVDSTR, or a request cut off by the board restarting left no trace on the
+// page. err() puts the reason where the operator is looking, and clears itself
+// when the next request succeeds.
+let errTimer = null;
+function err(e) {
+  const box = $('#err');
+  if (!box) { console.warn(e); return; }
+  box.textContent = (e && e.message) ? e.message : String(e);
+  box.className = 'on';
+  clearTimeout(errTimer);
+  errTimer = setTimeout(() => { box.className = ''; }, 8000);
+}
+
+// A fire-and-forget POST that still reports a failure.
+//   quiet=true means "a missing EVDSTR is expected here" (the stream may be
+//   paired or not); the board answers 200 {applied:"ctr-only"} in that case.
+const txt = (url, body, quiet) => post(url, body)
+  .then(r => { if (r && r.ok === false && !quiet) err(r.error || 'request failed'); })
+  .catch(e => { if (!quiet) err(e); });
+
+// The board turns a server name into an mDNS host: letters and digits only.
+const sanitizeHost = v => String(v || '').replace(/[^A-Za-z0-9]/g, '');
+
 async function tick() {
   const s = await j('/api/state');
   if (s.raw) return;
@@ -274,50 +305,71 @@ async function tick() {
     : 'STR searching\u2026';
   $('#p-str').className = 'pill ' + (d.paired && d.cached ? 'ok' : 'warn');
 
+  // Every number below is `?? '-'`: a firmware that does not publish a field
+  // yet must show a dash, not "NaN kHz".
+  const kb = n => (typeof n === 'number' ? (n / 1000).toFixed(1) + ' kHz' : '-');
   $('#cap').innerHTML = kv({
-    Source: s.source, Mode: s.mode, Volume: s.volume + (s.muted ? ' (muted)' : ''),
-    'Source rate': (s.sourceSampleRate / 1000).toFixed(1) + ' kHz',
+    Source: s.source ?? '-', Mode: s.mode ?? '-',
+    Volume: (s.volume ?? '-') + (s.muted ? ' (muted)' : ''),
+    'Source rate': kb(s.sourceSampleRate),
     DLNA: s.dlnaPlaying ? 'playing' : '-',
     USB: s.usbStreaming ? 'streaming'
-         : (s.source === 'USB' ? ('waiting for host' + (s.usbError ? ' (' + s.usbError + ')' : '')) : '-'),
-    'USB host vol': s.usbHostMuted ? 'muted' : (s.usbHostVolumeDb + ' dB'),
-    Uptime: Math.floor(s.upMs / 1000) + ' s'
+         : (s.source === 'USB'
+            ? ('waiting for host' + (s.usbError ? ' (' + s.usbError + ')' : ''))
+            : '-'),
+    'USB host vol': s.usbHostMuted ? 'muted'
+                    : (typeof s.usbHostVolumeDb === 'number' ? s.usbHostVolumeDb + ' dB' : '-'),
+    Uptime: typeof s.upMs === 'number' ? Math.floor(s.upMs / 1000) + ' s' : '-'
   });
   $('#enc').innerHTML = kv({
-    Rate: (s.opusSampleRate / 1000) + ' kHz',
-    'Frame': s.opusFrameSamples + ' samples',
-    Bitrate: Math.round(s.encBitrate / 1000) + ' kbps',
-    Complexity: s.encComplexity,
+    Rate: kb(s.opusSampleRate),
+    'Frame': (s.opusFrameSamples ?? '-') + ' samples',
+    Bitrate: typeof s.encBitrate === 'number' ? Math.round(s.encBitrate / 1000) + ' kbps' : '-',
+    Complexity: s.encComplexity ?? '-',
     VBR: s.encVbr ? (s.encVbrConstraint ? 'constrained' : 'on') : 'off',
-    Signal: s.encSignal, Application: s.encApplication
+    Signal: s.encSignal ?? '-', Application: s.encApplication ?? '-'
   });
+  const lastFrameAge = (typeof s.linkLastOkMs === 'number' && typeof s.upMs === 'number')
+    ? Math.max(0, Math.round((s.upMs - s.linkLastOkMs) / 100)) / 10 : null;
   $('#lnk').innerHTML = kv({
     Healthy: s.linkHealthy ? 'yes' : 'no',
-    Sent: s.linkSent, Dropped: s.linkDropped, 'CS timeouts': s.linkCsTimeouts
+    Sent: s.linkSent ?? '-', Dropped: s.linkDropped ?? '-',
+    'CS timeouts': s.linkCsTimeouts ?? '-',
+    'Last frame': lastFrameAge === null ? '-' :
+                  (lastFrameAge < 0.2 ? 'now' : lastFrameAge + ' s ago')
   });
   $('#str').innerHTML = kv({
-    Paired: d.paired ? d.host : 'no',
+    Paired: d.paired ? (d.host || d.strIp) : 'no',
     Subscribers: d.subscribers ?? '-',
     'Queue': (d.queueDepth ?? '-') + ' / ' + (d.queueTarget ?? '-'),
     'Pacer late': (d.pacerLateMs ?? '-') + ' ms',
     Version: d.strVersion || '-'
   });
   updateLink(s, d);
+  const kbi = n => (typeof n === 'number' ? (n / 1024).toFixed(n > 1024 * 100 ? 0 : 1) + ' KB' : '-');
   $('#mem').innerHTML = kv({
-    'Heap free': (s.heapFree / 1024).toFixed(1) + ' KB',
-    'Heap min': (s.heapMinFree / 1024).toFixed(1) + ' KB',
-    'PSRAM free': (s.psramFree / 1024).toFixed(0) + ' KB'
+    'Heap free': kbi(s.heapFree),
+    'Heap min': kbi(s.heapMinFree),
+    'PSRAM free': kbi(s.psramFree)
   });
 
-  if (!$('#vol').matches(':active')) { $('#vol').value = s.volume; $('#volv').textContent = s.volume; }
-  if (!$('#mode').matches(':active')) $('#mode').value = s.mode;
-  $('#quiet').checked = !!s.quiet;
-
-  const st = await j('/api/stats');
-  if (!st.raw) {
-    $('#log');
-    window.__stats = st;
+  // Only write a control back when nothing is being dragged in it: a range
+  // input that is `:active` is under the finger, and a select that is open on
+  // iOS is not :active at all, so check focus as well.
+  const idle = sel => { const el = $(sel); return el && !el.matches(':active') &&
+                                                        document.activeElement !== el; };
+  // A board that has not answered yet sends `s` as {} (j() falls back to
+  // {raw: text}); writing undefined into a range input blanks it, so every
+  // mirror is guarded on the value actually being a number.
+  if (idle('#vol') && typeof s.volume === 'number') {
+    $('#vol').value = s.volume; $('#volv').textContent = s.volume;
   }
+  if (idle('#mode')) $('#mode').value = s.mode ?? 'music';
+  if ($('#quiet')) $('#quiet').checked = !!s.quiet;
+
+  // The volume slider mirrors the stream's volume, but a change made on the
+  // Audio tab must reach EVDSTR's players. That relay happens in /api/config,
+  // so nothing extra is needed here.
 }
 
 // ---- Pin link monitor (Stream tab) ----
@@ -433,57 +485,98 @@ function drawSpark() {
 }
 
 // ---- Audio tab ----
-$('#vol').oninput = e => $('#volv').textContent = e.target.value;
-$('#vol').onchange = e => post('/api/config', { masterVolume: +e.target.value });
-$('#mute').onclick = async () => {
-  const s = await j('/api/state'); post('/api/config', { masterMuted: !s.muted });
-};
-$('#mode').onchange = e => post('/api/config', { mode: e.target.value });
-$('#quiet').onchange = e => post('/api/config', { quietMode: e.target.checked });
+// on(): wire a control if it is on the page. Writing `$('#x').onclick` for an
+// id that a trimmed dashboard does not carry throws a TypeError that stops the
+// rest of this script - silently, because a chunked response has already been
+// committed. Losing one control must not cost the other twenty.
+const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); };
+on('#vol', 'input', e => $('#volv').textContent = e.target.value);
+on('#vol', 'change', e => txt('/api/config', { masterVolume: +e.target.value }));
+// The button reads the live state so it toggles what is actually there, not a
+// stale copy; a failed read leaves it doing nothing rather than guessing.
+on('#mute', 'click', async () => {
+  try {
+    const s = await j('/api/state');
+    if (s.raw) { err('board did not answer'); return; }
+    txt('/api/config', { masterMuted: !s.muted }, true);
+  } catch (e) { err(e); }
+});
+on('#mode', 'change', e => txt('/api/config', { mode: e.target.value }));
+// Quiet mode is CTR-only DSP: the field is `quietMode` in the handler's JSON
+// and `quiet` in /api/state that tick() reads back.
+on('#quiet', 'change', e => txt('/api/config', { quietMode: e.target.checked }));
 
 async function loadEnc() {
   const e = await j('/api/audio/encoding');
   if (e.raw) return;
-  $('#br').value = e.bitrate; $('#brv').textContent = Math.round(e.bitrate / 1000) + ' kbps';
-  $('#cx').value = e.complexity; $('#cxv').textContent = e.complexity;
-  $('#sig').value = e.signal; $('#app').value = e.application;
-  $('#rate').value = String(e.sampleRate);
-  $('#buf').value = e.bufferMs; $('#bufv').textContent = e.bufferMs;
+  // Only mirror a control that is not being used: loadEnc() also runs after
+  // every save, and overwriting a slider mid-drag jumps it back.
+  const focusId = document.activeElement ? document.activeElement.id : '';
+  const set = (id, v, out, fmt) => {
+    if (v === undefined || v === null || focusId === id) return;
+    const el = $('#' + id); if (el) el.value = v;
+    if (out) { const o = $('#' + out); if (o) o.textContent = fmt ? fmt(v) : v; }
+  };
+  set('br', e.bitrate, 'brv', v => Math.round(v / 1000) + ' kbps');
+  set('cx', e.complexity, 'cxv');
+  set('sig', e.signal); set('app', e.application);
+  set('rate', e.sampleRate === undefined ? undefined : String(e.sampleRate));
+  set('buf', e.bufferMs, 'bufv', v => v + ' ms');
 }
-$('#br').oninput = e => $('#brv').textContent = Math.round(e.target.value / 1000) + ' kbps';
-$('#cx').oninput = e => $('#cxv').textContent = e.target.value;
-$('#encsave').onclick = () => post('/api/audio/encoding', {
+on('#br', 'input', e => $('#brv').textContent = Math.round(e.target.value / 1000) + ' kbps');
+on('#cx', 'input', e => $('#cxv').textContent = e.target.value);
+// The encoder form sends the whole set, so the selects are always current.
+// The buffer slider is NOT part of it: it applies with its own button.
+on('#encsave', 'click', () => post('/api/audio/encoding', {
   bitrate: +$('#br').value, complexity: +$('#cx').value, signal: $('#sig').value,
   application: $('#app').value, sampleRate: +$('#rate').value, save: true
+}).then(loadEnc).catch(err));
+on('#encrevert', 'click', () => post('/api/audio/encoding/revert').then(loadEnc).catch(err));
+on('#encdef', 'click', () => post('/api/audio/encoding/defaults').then(loadEnc).catch(err));
+// Source and transport buttons go through the CTR -> receiver UART bridge, so
+// a 502 here means the receiver board did not answer, which the operator needs
+// to see (USB also answers 501 when it is not built into the firmware).
+document.querySelectorAll('[data-src]').forEach(b => b.onclick = async () => {
+  const r = await post('/api/source', { source: b.dataset.src }).catch(e => ({ error: e.message }));
+  if (!r.ok) err(r.error || 'source switch refused');
 });
-$('#encrevert').onclick = () => post('/api/audio/encoding/revert').then(loadEnc);
-$('#encdef').onclick = () => post('/api/audio/encoding/defaults').then(loadEnc);
-document.querySelectorAll('[data-src]').forEach(b => b.onclick =
-  () => post('/api/source', { source: b.dataset.src }));
-document.querySelectorAll('[data-cmd]').forEach(b => b.onclick =
-  () => post('/api/cmd', { cmd: b.dataset.cmd }));
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = async () => {
+  const r = await post('/api/cmd', { cmd: b.dataset.cmd }).catch(e => ({ error: e.message }));
+  if (!r.ok) err(r.error || 'command refused');
+});
 
 // ---- Stream tab ----
-$('#pair').onclick = async () => {
-  const r = await post('/api/link/pair', { host: $('#strhost').value.trim() });
-  $('#pairstat').textContent = r.ok ? 'Paired with ' + r.host : (r.error || 'failed');
-};
-$('#refresh').onclick = async () => {
-  $('#players').textContent = JSON.stringify(await j('/api/link/players'), null, 1);
-  $('#zones').textContent = JSON.stringify(await j('/api/link/zones'), null, 1);
-};
-$('#buf').oninput = e => $('#bufv').textContent = e.target.value;
-$('#bufapply').onclick = () => post('/api/config', { audioBufferMs: +$('#buf').value });
+on('#pair', 'click', async () => {
+  $('#pairstat').textContent = 'checking...';
+  try {
+    const r = await post('/api/link/pair', { host: $('#strhost').value.trim() });
+    $('#pairstat').textContent = r.ok ? 'Paired with ' + r.host : (r.error || 'failed');
+    if (!r.ok) err('pairing failed: ' + (r.error || 'no answer'));
+  } catch (e) { err(e); }
+});
+on('#refresh', 'click', async () => {
+  try {
+    $('#players').textContent = JSON.stringify(await j('/api/link/players'), null, 1);
+    $('#zones').textContent = JSON.stringify(await j('/api/link/zones'), null, 1);
+  } catch (e) { err('EVDSTR unreachable: ' + e.message); }
+});
+on('#buf', 'input', e => $('#bufv').textContent = e.target.value);
+on('#bufapply', 'click', () => txt('/api/config', { audioBufferMs: +$('#buf').value }, true));
 
 // ---- Network tab ----
 async function loadNet() {
   const n = await j('/api/network/state');
-  if (n.raw) return;
-  $('#net').innerHTML = kv({ Name: n.name, SSID: n.ssid, IP: n.ip,
-    'AP mode': n.ap ? 'yes' : 'no', RSSI: n.rssi + ' dBm' });
-  $('#n-name').value = n.name; $('#n-ssid').value = n.ssid;
+  if (!n || n.raw) { $('#net').innerHTML = kv({ Status: 'unreachable' }); return; }
+  const ap = (n.ap === true || n.ap === 'true');
+  $('#net').innerHTML = kv({ Name: n.name, SSID: n.ssid || '-', IP: n.ip,
+    'AP mode': ap ? 'yes' : 'no', RSSI: n.rssi + ' dBm',
+    Static: (n.static === true || n.static === 'true') ? (n.gw || 'yes') : 'no' });
+  // Typing in the fields must not be overwritten by the 2 s refresh.
+  const focusId = document.activeElement ? document.activeElement.id : '';
+  if (focusId !== 'n-name') $('#n-name').value = n.name || '';
+  if (focusId !== 'n-ssid') $('#n-ssid').value = n.ssid || '';
 }
-$('#nettest').onclick = async () => {
+on('#nettest', 'click', async () => {
   $('#nettestout').textContent = 'testing...';
   await j('/api/network-test?start=1');
   for (let i = 0; i < 20; i++) {
@@ -492,41 +585,94 @@ $('#nettest').onclick = async () => {
     if (t.done) { $('#nettestout').textContent = (t.ok ? 'reachable' : 'no route') + ' in ' + t.ms + ' ms'; return; }
   }
   $('#nettestout').textContent = 'timed out';
-};
-$('#restart').onclick = () => post('/api/restart');
-$('#n-save').onclick = () => post('/save', { name: $('#n-name').value,
-  ssid: $('#n-ssid').value, password: $('#n-pass').value });
+});
+on('#restart', 'click', () => txt('/api/restart', {}));
+// The handler reads `password`; the AP setup page uses the same name. An empty
+// field with an unchanged SSID means "keep the stored password".
+on('#n-save', 'click', async () => {
+  await post('/save', { name: $('#n-name').value,
+    ssid: $('#n-ssid').value, password: $('#n-pass').value }).catch(e => err(e));
+  // The board restarts itself 200 ms after answering; say so rather than
+  // leaving the page looking as if nothing happened.
+  $('#nettestout').textContent = 'saving... the board restarts in a moment, ' +
+    'then reload http://' + (sanitizeHost($('#n-name').value) || 'evdctr') + '.local/';
+});
 
 // ---- Update tab ----
 async function upload(target, input) {
-  const f = input.files[0];
-  if (!f) return;
+  const f = input && input.files ? input.files[0] : null;
+  if (!f) { $('#otastate').textContent = 'choose a .bin first'; return; }
   const fd = new FormData(); fd.append('update', f, f.name);
-  $('#otastate').textContent = 'uploading ' + target + '...';
-  const r = await fetch('/api/ota/upload?target=' + target, { method: 'POST', body: fd });
-  $('#otastate').textContent = await r.text();
+  $('#otastate').textContent = 'uploading ' + target + ' (' +
+    (f.size / 1024).toFixed(0) + ' KB)...';
+  try {
+    const r = await fetch('/api/ota/upload?target=' + target, { method: 'POST', body: fd });
+    $('#otastate').textContent = await r.text();
+  } catch (e) {
+    // An image for the wrong target, or a dropped link: say so instead of
+    // leaving "uploading..." on the screen for ever.
+    $('#otastate').textContent = 'upload failed: ' + e;
+  }
 }
-$('#up-ctr').onclick = () => upload('ctr', $('#f-ctr'));
-$('#up-str').onclick = () => upload('str', $('#f-str'));
-$('#ap-ctr').onclick = async () => { $('#otastate').textContent = 'applying...';
-  await post('/api/ota/apply?target=ctr'); };
-$('#ap-str').onclick = async () => { $('#otastate').textContent = 'pushing to EVDSTR...';
-  $('#otastate').textContent = JSON.stringify(await post('/api/ota/apply?target=str')); };
+on('#up-ctr', 'click', () => upload('ctr', $('#f-ctr')));
+on('#up-str', 'click', () => upload('str', $('#f-str')));
+on('#ap-ctr', 'click', async () => {
+  $('#otastate').textContent = 'applying... the board restarts when it is done';
+  try {
+    const r = await post('/api/ota/apply?target=ctr');
+    $('#otastate').textContent = JSON.stringify(r);
+  } catch (e) {
+    // The connection drops the moment the board restarts - that is success,
+    // not an error.
+    $('#otastate').textContent = 'board restarting (connection closed)';
+  }
+});
+on('#ap-str', 'click', async () => {
+  $('#otastate').textContent = 'pushing to EVDSTR... (this can take a minute)';
+  try {
+    const r = await post('/api/ota/apply?target=str');
+    $('#otastate').textContent = JSON.stringify(r);
+  } catch (e) { err('STR push failed: ' + e.message); }
+});
 
 // ---- Log tab ----
+// A full board answers `since=<seq>` with only the new lines, so the page can
+// stay open for days. `nextSeq` is what the next poll must ask for; if the
+// board restarted, its sequence starts again at 1 and the page would sit there
+// waiting for a seq it will never see - so a nextSeq that went backwards
+// resets the view instead of freezing it.
 async function pollLog() {
   const r = await j('/api/log/tail?since=' + lastLogSeq);
-  if (!r.raw && r.lines && r.lines.length) {
+  if (r.raw) return;
+  if (typeof r.nextSeq === 'number' && r.nextSeq < lastLogSeq) {
+    lastLogSeq = 0; $('#log').textContent = ''; return;
+  }
+  if (r.lines && r.lines.length) {
     lastLogSeq = r.nextSeq;
     const el = $('#log');
-    el.textContent += r.lines.map(l => `[${(l.ms/1000).toFixed(1)}] ${l.level} ${l.text}`).join('\n') + '\n';
+    if (!el) return;
+    el.textContent += r.lines.map(l =>
+      `[${(l.ms / 1000).toFixed(1)}] ${l.level} ${l.text}`).join('\n') + '\n';
+    // Keep the buffer bounded: a board logging at 100 lines/s would otherwise
+    // grow the DOM until the tab dies.
+    if (el.textContent.length > 200000) el.textContent = el.textContent.slice(-150000);
     el.scrollTop = el.scrollHeight;
   }
 }
 
-tick(); loadEnc(); loadNet(); pollLog();
-setInterval(tick, 2000);
-setInterval(pollLog, 2000);
+// Everything above defines its handlers at top level. The pollers are started
+// last so the first tick() runs with every control already wired, and the
+// promise it returns is caught: an unhandled rejection here (STR unreachable,
+// board rebooting after an OTA) used to surface as a frozen dashboard with
+// nothing in the console.
+function safeStart(fn) { return fn().catch(e => console.warn('startup', e)); }
+safeStart(tick);
+safeStart(loadEnc);
+safeStart(loadNet);
+safeStart(pollLog);
+setInterval(() => { tick().catch(e => console.warn('tick', e)); }, 2000);
+setInterval(() => { pollLog().catch(e => {}); }, 2000);
+setInterval(() => { loadNet().catch(e => {}); }, 5000);
 </script>
 </body>
 </html>

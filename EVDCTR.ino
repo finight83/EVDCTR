@@ -212,8 +212,22 @@ static_assert(OPUS_MAX_PACKET_BYTES == LINK_MAX_PAYLOAD,
 #define PENDING_MAX_FRAMES 4096
 
 // ---- USB Audio Class -------------------------------------------------------
-// EVDUsb.h targets EspUsbDevice 3.x (see that file). __has_include there
-// downgrades this to 0 if the library is missing, so the firmware still builds.
+// EVDUsb.h targets EspUsbDevice 3.x.
+//
+// The #include of the library lives HERE, at the top of the sketch, and nowhere
+// else. arduino-cli decides which libraries to compile - and whose include
+// paths to add - by scanning the .ino/.pde files for #include lines only. A
+// library included from a .h file alone is never resolved, so
+// <EspUsbDevice.h> stayed off the include path, EVDUsb.h's probe said "not
+// found", and every USB function compiled to its no-op fallback: a build with
+// no error, no USB input, and a #pragma message easy to scroll past.
+//
+// The #include is unconditional on purpose: arduino-cli must see the literal
+// line to resolve the library, and __has_include cannot be relied on here
+// because the probe runs BEFORE the library's include path has been added.
+// A missing library is a build error with the library's name in it, which is
+// the honest outcome - flashing a board that silently cannot do USB is not.
+#include <EspUsbDevice.h>
 #define EVD_HAS_USB_DEVICE_LIB 1
 // Readable as a value at runtime, so a handler can refuse without #if inside a
 // function body.

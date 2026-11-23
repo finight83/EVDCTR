@@ -46,14 +46,30 @@
 // ============================================================================
 #include <esp_heap_caps.h>
 
-#if EVD_HAS_USB_DEVICE_LIB
+#if defined(__has_include)
 #if __has_include(<EspUsbDevice.h>)
 #include <EspUsbDevice.h>
+#define EVD_USB_LIB_OK 1
 #else
-#undef EVD_HAS_USB_DEVICE_LIB
-#define EVD_HAS_USB_DEVICE_LIB 0
-#pragma message("EVDCTR: EspUsbDevice.h not found, USB input disabled")
+#define EVD_USB_LIB_OK 0
 #endif
+#else
+#include <EspUsbDevice.h>
+#define EVD_USB_LIB_OK 1
+#endif
+
+// The flag is DERIVED, never assumed. arduino-cli preprocesses every header
+// with the sketch's -D flags, so EVD_HAS_USB_DEVICE_LIB (1 in EVDCTR.ino) is
+// already defined here - but the include path for a library is only added when
+// arduino-cli resolved that library for this sketch, so the probe is what
+// actually decides. Defining it unconditionally, as this file used to, meant a
+// missing library produced a build that printed "USB input disabled" and then
+// failed to link, or worse, linked against nothing.
+#undef EVD_HAS_USB_DEVICE_LIB
+#define EVD_HAS_USB_DEVICE_LIB EVD_USB_LIB_OK
+#define EVD_USB_PROBE_SEEN 1
+#if !EVD_USB_LIB_OK
+#pragma message("EVDCTR: EspUsbDevice.h not found, USB input disabled")
 #endif
 
 // ---- Host volume / mute mirrors -------------------------------------------
@@ -73,7 +89,7 @@ static EspUsbDevice               gUsbDevice;
 static EspUsbAudioFunction        gUsbAudio(gUsbDevice, EspUsbAudioProtocol::Uac1);
 static EspUsbAudioPlaybackStream *gUsbPlayback = nullptr;
 
-static SemaphoreHandle_t gUsbLifecycleMutex = nullptr;
+// gUsbLifecycleMutex is defined in EVDState.h with the other mutexes.
 static bool              gUsbRunning        = false;
 static const char       *gUsbLastError      = "";
 
