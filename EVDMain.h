@@ -26,6 +26,24 @@ inline void printBootBanner(const char *phase) {
   Serial.printf("+------------------------------------------------------+\n");
 }
 
+// ---- Boot progress marker ---------------------------------------------
+// A board that restarts in a loop prints nothing useful before it dies. This
+// keeps a magic word in RTC memory (survives a reset, not a power cycle): the
+// previous boot clears it at the end of setup(), so finding it set on the next
+// boot means the last run never finished - and the last [STEP] line printed is
+// the subsystem it died in.
+RTC_NOINIT_ATTR static uint32_t gBootMarker;
+static const uint32_t BOOT_MARKER_LIVE   = 0x45564431u;   // "EVD1"
+static const uint32_t BOOT_MARKER_FINISH = 0x45564432u;   // "EVD2"
+static bool gLastBootWasCrash = false;
+
+inline void initBootMarker() {
+  gLastBootWasCrash = (gBootMarker == BOOT_MARKER_LIVE);
+  gBootMarker = BOOT_MARKER_LIVE;
+}
+
+inline void markBootComplete() { gBootMarker = BOOT_MARKER_FINISH; }
+
 inline const char *resetReasonStr(esp_reset_reason_t r) {
   switch (r) {
     case ESP_RST_POWERON:   return "POWERON (cold boot)";
@@ -49,18 +67,26 @@ inline void setup_serial() {
   Serial.begin(LOG_BAUD);
   delay(300);
 
+  initBootMarker();
   printBootBanner("booting");
   Serial.printf("[BOOT] firmware      : EVDCTR %s\n", EVD_FW_VERSION);
   Serial.printf("[BOOT] reset reason  : %s\n", resetReasonStr(esp_reset_reason()));
+  if (gLastBootWasCrash) {
+    // A board that restarts in a loop says nothing at 115200 before the panic,
+    // so the evidence has to be printed by the NEXT boot.
+    Serial.printf("[BOOT] LAST BOOT DID NOT FINISH - the previous run never "
+                  "reached the end of setup(). Read the lines below: the last "
+                  "[STEP] printed is where it died.\n");
+  }
   Serial.printf("[BOOT] chip          : %s rev %d, %d MHz, %d core(s)\n",
                 ESP.getChipModel(), (int)ESP.getChipRevision(),
                 (int)getCpuFrequencyMhz(), (int)ESP.getChipCores());
-  Serial.printf("[BOOT] flash         : %u MB, sketch %u KB\n",
-                (unsigned)(ESP.getFlashChipSize() / (1024 * 1024)),
-                (unsigned)(ESP.getSketchSize() / 1024));
-  Serial.printf("[BOOT] psram         : %u KB free\n",
-                (unsigned)(ESP.getFreePsram() / 1024));
-  Serial.printf("[BOOT] free heap     : %u KB\n", (unsigned)(ESP.getFreeHeap() / 1024));
+  // Flash size and sketch size are printed with the resources line after the
+  // tasks start: both go through the chip-debug-report path, and that path is
+  // what must not run before the rest of setup() has had a chance to.
+  // ESP.getFreePsram() / getFreeHeap() are deliberately NOT called here: they
+  // touch the chip-debug-report path, which pulls the whole debug report into
+  // the image. Measured after the tasks start instead (see "resources" below).
   Serial.printf("[BOOT] dashboard     : %u B gzip (EVDCTRL.h via gen_gz.py)\n",
                 (unsigned)EVDCTRL_GZ_LEN);
   Serial.printf("[BOOT] encoder       : %d bps, %u Hz opus, %d ms frames, %d ch\n",
@@ -230,22 +256,40 @@ void setup() {
          (unsigned long)LINK_SPI_HZ);
   }
 
+  Serial.printf("[STEP] http server\n");
   setup_http_server();
+  Serial.printf("[STEP] dlna\n");
   initDlna();
+  Serial.printf("[STEP] receiver link\n");
   setupReceiverLink();
 
+  Serial.printf("[STEP] i2s input\n");
   if (!setup_i2s_in()) {
     LOGE("I2S input unavailable; USB/DLNA inputs still work");
   }
 
   // Before setup_queues_and_tasks(): audioReadTask exists from that call on,
   // and the USB lifecycle mutex must exist before anything can take it.
+  Serial.printf("[STEP] usb lifecycle\n");
   initUsbLifecycle();
 
+  Serial.printf("[STEP] queues and tasks\n");
   setup_queues_and_tasks();
+  Serial.printf("[STEP] tasks started\n");
 
   logLinkPeerState("boot");
+  // Now that every task and buffer exists, report what is actually left. This
+  // is the number that matters, and it is the one that was missing from the
+  // boot log when the board restarted before reaching here.
+  Serial.printf("[BOOT] resources     : heap %u KB free, psram %u KB free, "
+                "sketch %u KB of %u KB\n",
+                (unsigned)(ESP.getFreeHeap() / 1024),
+                (unsigned)(ESP.getFreePsram() / 1024),
+                (unsigned)(ESP.getSketchSize() / 1024),
+                (unsigned)(ESP.getFreeSketchSpace() / 1024));
   printBootBanner("boot complete");
+  gLastBootWasCrash = false;   // reached the end: the next boot is a normal one
+  markBootComplete();
   Serial.printf("[BOOT] reach me at  : http://%s/  (pair EVDSTR on the Stream tab)\n",
                 accessPointActive ? WiFi.softAPIP().toString().c_str()
                                   : WiFi.localIP().toString().c_str());
@@ -263,6 +307,25 @@ void loop() {
   serviceReceiverLink();
   serviceUsbAudio();
   pollUsbAudioEvents();
+
+  // USB bring-up runs on the HTTP task. If it never returns, everything else
+  // keeps running and this line is how the operator finds out: on serial, and
+  // in the log ring the dashboard reads.
+  static bool usbStuckReported = false;
+  if (usbBringUpStuck()) {
+    if (!usbStuckReported) {
+      usbStuckReported = true;
+      Serial.printf("[USB] WARNING: startServerUsbAudio() has been inside "
+                    "EspUsbDevice::begin() for %lu ms. The HTTP task is stuck, "
+                    "so the dashboard will not answer until the board resets. "
+                    "Audio is unaffected.\n",
+                    (unsigned long)(millis() - gUsbStartBeganMs));
+      LOGE("USB audio: begin() stuck for %lu ms - HTTP task blocked",
+           (unsigned long)(millis() - gUsbStartBeganMs));
+    }
+  } else {
+    usbStuckReported = false;
+  }
   serviceDeferredSettingsFlush();
   serviceLinkWatchdog();
 

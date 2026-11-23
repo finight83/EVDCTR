@@ -95,6 +95,22 @@ static const char       *gUsbLastError      = "";
 
 inline const char *usbLastError() { return gUsbLastError; }
 
+// ---- Bring-up watchdog -----------------------------------------------------
+// EspUsbDevice::begin() is called from the HTTP task when the source is
+// switched to USB. If it blocks - a USB controller that never leaves reset, a
+// host that half-enumerates - the HTTP task is gone for good: no dashboard, no
+// /api/state, nothing to reset it with. begin() cannot be interrupted, but the
+// rest of the firmware can notice it and say so, and a later switch can take
+// the controller down and start again instead of queueing behind a dead task.
+static volatile bool     gUsbStarting     = false;
+static volatile uint32_t gUsbStartBeganMs = 0;
+static volatile bool     gUsbAbortRequest = false;
+
+inline bool usbBringUpStuck() {
+  return gUsbStarting && (millis() - gUsbStartBeganMs) > 8000;
+}
+
+
 // Called from setup(), before audioReadTask exists. Idempotent.
 inline void initUsbLifecycle() {
   if (!gUsbLifecycleMutex) gUsbLifecycleMutex = xSemaphoreCreateMutex();
@@ -203,9 +219,13 @@ inline bool startServerUsbAudio() {
   }
   if (xSemaphoreTake(gUsbLifecycleMutex, portMAX_DELAY) != pdTRUE) {
     gUsbLastError = "mutex_fail";
+    gUsbStarting  = false;
     return false;
   }
   if (gUsbRunning) { xSemaphoreGive(gUsbLifecycleMutex); return true; }
+
+  gUsbStarting     = true;
+  gUsbStartBeganMs = millis();
 
   LOGI("USB audio: enumerating UAC1 speaker (%d Hz, 16-bit, %d ch), heap %u B",
        SOURCE_SAMPLE_RATE, CHANNELS, (unsigned)ESP.getFreeHeap());
@@ -242,6 +262,7 @@ inline bool startServerUsbAudio() {
     LOGE("USB audio: configure failed: %s", esp_err_to_name(err));
     gUsbLastError = "configure_failed";
     gUsbPlayback  = nullptr;
+    gUsbStarting  = false;
     xSemaphoreGive(gUsbLifecycleMutex);
     return false;
   }
@@ -261,6 +282,7 @@ inline bool startServerUsbAudio() {
          "ESP_ERR_INVALID_STATE = wrong USB mode (needs USB-OTG/TinyUSB)");
     gUsbLastError = "begin_failed";
     gUsbPlayback  = nullptr;
+    gUsbStarting  = false;
     xSemaphoreGive(gUsbLifecycleMutex);
     return false;
   }
@@ -299,6 +321,7 @@ inline bool startServerUsbAudio() {
 
   gUsbLastError = "";
   gUsbRunning   = true;
+  gUsbStarting  = false;
   xSemaphoreGive(gUsbLifecycleMutex);
 
   LOGI("USB audio: enumerated %04x:%04x, heap after begin %u B - plug the host "
