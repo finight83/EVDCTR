@@ -116,9 +116,9 @@ inline void downlinkForwardPost(AsyncWebServerRequest *request,
   if (!accumulateReqBody(request, data, len, index, total, 1024,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
-
   String out; int code = 0;
   bool ok = downlinkRequest("POST", strPath, String(body ? body : ""), out, code);
+  releaseReqBody(request);   // body copied into the request above
   if (!out.length()) {
     out = String("{\"ok\":false,\"downlink\":false,\"error\":\"EVDSTR unreachable\"}");
   }
@@ -189,6 +189,20 @@ inline String downlinkZonesJson() {
 // The Stream tab posts {"host":"192.168.1.42"} here. We prove the address
 // before keeping it: a wrong IP that accepts a TCP connection but answers
 // nothing is worse than no address at all.
+// Accept "192.168.1.42", "192.168.1.42:8080", "evdstr.local", "EVDSTR".
+// Reject spaces, slashes, schemes and anything long enough to be a mistake.
+inline bool isPairableHost(const String &h) {
+  if (h.length() == 0 || h.length() > 253) return false;
+  for (size_t i = 0; i < h.length(); ++i) {
+    char c = h[i];
+    bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == ':';
+    if (!ok) return false;
+  }
+  if (h.indexOf("..") >= 0 || h.startsWith(".") || h.endsWith(".")) return false;
+  return true;
+}
+
 inline void handleLinkPair(AsyncWebServerRequest *request, uint8_t *data,
                            size_t len, size_t index, size_t total) {
   const char *body = nullptr; size_t bodyLen = 0;
@@ -196,7 +210,9 @@ inline void handleLinkPair(AsyncWebServerRequest *request, uint8_t *data,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
-  if (deserializeJson(in, body, bodyLen) || !in["host"].is<const char*>()) {
+  bool parsed = !deserializeJson(in, body, bodyLen) && in["host"].is<const char*>();
+  releaseReqBody(request);   // body copied into in
+  if (!parsed) {
     request->send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
     return;
   }
@@ -204,6 +220,16 @@ inline void handleLinkPair(AsyncWebServerRequest *request, uint8_t *data,
   host.trim();
   if (host.startsWith("http://")) host = host.substring(7);
   while (host.endsWith("/")) host.remove(host.length() - 1);
+
+  // Refuse anything that is not an IPv4 address or a plain hostname. Without
+  // this, the address the operator types becomes the destination of a firmware
+  // POST in EVDOTA.h: a typo, or a stale DHCP lease, would push a 2 MB image at
+  // whatever answers there.
+  if (!isPairableHost(host)) {
+    request->send(400, "application/json",
+                  "{\"ok\":false,\"error\":\"expected an IPv4 address or hostname\"}");
+    return;
+  }
 
   String out; int code = 0;
   String prev = strHost;

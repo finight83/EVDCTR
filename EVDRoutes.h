@@ -180,7 +180,9 @@ inline void handlePostAudioEncoding(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument doc(512);
-  if (deserializeJson(doc, body, bodyLen)) {
+  bool badBody = (deserializeJson(doc, body, bodyLen) != DeserializationError::Ok);
+  releaseReqBody(request);   // doc has its own copy; nothing below reads body
+  if (badBody) {
     request->send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
     return;
   }
@@ -255,7 +257,9 @@ inline void handleApiSourceBridge(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
-  if (deserializeJson(in, body, bodyLen) || !in["source"].is<const char*>()) {
+  bool parsed = !deserializeJson(in, body, bodyLen) && in["source"].is<const char*>();
+  releaseReqBody(request);
+  if (!parsed) {
     request->send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
     return;
   }
@@ -265,6 +269,13 @@ inline void handleApiSourceBridge(AsyncWebServerRequest *request,
     return;
   }
   if (s == "USB") {
+    // Refuse honestly: switching to USB when it is compiled out would leave the
+    // box silent with the dashboard showing "USB streaming".
+    if (!EVD_USB_INPUT_BUILT) {
+      request->send(501, "application/json",
+                    "{\"ok\":false,\"error\":\"USB input not built into this firmware\"}");
+      return;
+    }
     startServerUsbAudio();
     serverInputSource = SRC_FROM_USB;
   } else {
@@ -285,7 +296,9 @@ inline void handleApiCmdBridge(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   DynamicJsonDocument in(256);
-  if (deserializeJson(in, body, bodyLen) || !in["cmd"].is<const char*>()) {
+  bool parsed = !deserializeJson(in, body, bodyLen) && in["cmd"].is<const char*>();
+  releaseReqBody(request);
+  if (!parsed) {
     request->send(400, "application/json", "{\"ok\":false,\"error\":\"bad json\"}");
     return;
   }
@@ -322,6 +335,7 @@ inline void handleApiConfigRelay(AsyncWebServerRequest *request,
                          "{\"ok\":false,\"error\":\"payload too large\"}",
                          body, bodyLen)) return;
   String b(body ? body : "");
+  releaseReqBody(request);   // body copied into b; nothing below reads it
 
   // Mirror the operator's intent locally for the parts CTR owns, so the
   // capture side stays coherent even when STR is offline. Only the fields
@@ -416,7 +430,9 @@ inline void setup_http_server() {
       if (!accumulateReqBody(req, data, len, index, total, 128,
                              "{\"ok\":false}", body, bodyLen)) return;
       DynamicJsonDocument in(64);
-      if (!deserializeJson(in, body, bodyLen) && in["level"].is<int>()) {
+      bool ok = !deserializeJson(in, body, bodyLen);
+      releaseReqBody(req);
+      if (ok && in["level"].is<int>()) {
         int l = in["level"].as<int>();
         if (l >= 0 && l <= 3) gSerialLogLevel = (uint8_t)l;
       }
@@ -473,6 +489,7 @@ inline void setup_http_server() {
       if (!accumulateReqBody(r, data, len, index, total, 4096,
                              "<error/>", body, bodyLen)) return;
       dlnaHandleSoap(r, String(body), "avt");
+      releaseReqBody(r);
     });
   server.on("/upnp/control/rcs", HTTP_POST,
     [](AsyncWebServerRequest *r) {},
@@ -482,6 +499,7 @@ inline void setup_http_server() {
       if (!accumulateReqBody(r, data, len, index, total, 4096,
                              "<error/>", body, bodyLen)) return;
       dlnaHandleSoap(r, String(body), "rcs");
+      releaseReqBody(r);
     });
   server.on("/upnp/control/cms", HTTP_POST,
     [](AsyncWebServerRequest *r) {},
@@ -491,6 +509,7 @@ inline void setup_http_server() {
       if (!accumulateReqBody(r, data, len, index, total, 4096,
                              "<error/>", body, bodyLen)) return;
       dlnaHandleSoap(r, String(body), "cms");
+      releaseReqBody(r);
     });
   server.on("/upnp/event/avt", HTTP_ANY, [](AsyncWebServerRequest *r) { r->send(200, "text/xml", ""); });
   server.on("/upnp/event/rcs", HTTP_ANY, [](AsyncWebServerRequest *r) { r->send(200, "text/xml", ""); });

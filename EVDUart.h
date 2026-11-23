@@ -80,7 +80,20 @@ inline void serviceReceiverLink() {
       lineLen = 0;
       continue;
     }
-    if (lineLen < sizeof(line) - 1) line[lineLen++] = c;
-    else lineLen = 0;   // overflow: drop the line rather than truncate it
+    if (lineLen < sizeof(line) - 1) {
+      line[lineLen++] = c;
+    } else {
+      // Overflow. Drop the line rather than truncate it (a half-parsed
+      // BT_JSON is worse than none), but SAY SO: a silently discarded
+      // BT_JSON| made the dashboard's device list simply stop updating with
+      // nothing in the log to explain it.
+      static unsigned long lastOverflow = 0;
+      if (millis() - lastOverflow > 5000) {
+        lastOverflow = millis();
+        LOGW("src: line > %u bytes from the source board, dropped",
+             (unsigned)(sizeof(line) - 1));
+      }
+      lineLen = 0;
+    }
   }
 }

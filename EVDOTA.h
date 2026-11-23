@@ -18,6 +18,7 @@
 //  flash write of the apply step, which is what otaPauseAudio is for.
 // ============================================================================
 #include <Update.h>
+#include <ESPAsyncWebServer.h>
 #include <esp_heap_caps.h>
 #include <LittleFS.h>
 #include <HTTPClient.h>
@@ -109,6 +110,13 @@ inline void handleOtaUpload(AsyncWebServerRequest *request, String filename,
 //      POST /api/ota/apply.
 static bool otaPushSpoolToStr() {
   if (!strHost.length()) { otaUploadMessage = "no EVDSTR paired"; return false; }
+  // Second gate: the host is validated when it is paired, but a firmware POST
+  // is destructive enough to check again here rather than trust the stored
+  // value.
+  if (!isPairableHost(strHost)) {
+    otaUploadMessage = "paired STR address is not valid";
+    return false;
+  }
   File f = LittleFS.open(OTA_SPOOL_STR, "r");
   if (!f) { otaUploadMessage = "no STR image spooled"; return false; }
   const size_t size = f.size();
@@ -218,6 +226,9 @@ inline void handleOtaDelete(AsyncWebServerRequest *request) {
   request->send(200, "application/json",
                 String("{\"ok\":true,\"removed\":") + (removed ? "true" : "false") + "}");
 }
+
+// The server instance lives in EVDRoutes.h, which is included after this file.
+extern AsyncWebServer server;
 
 inline void setupOtaRoutes() {
   otaEnsureSpoolDir();

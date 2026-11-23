@@ -14,9 +14,15 @@
 // ============================================================================
 #include <esp_heap_caps.h>
 
-// The USB device stack is an optional library. On a board without it the
-// functions below become no-ops, so the firmware still builds and the other
-// inputs (I2S, DLNA) still work.
+// The USB device stack is an optional library, and this file is currently a
+// STUB: it calls setVid()/begin()/read()/connected() on EspUsbDevice, which is
+// not the API the library actually has. The unsplit server used
+// EspUsbAudioFunction + addPlaybackStream() + addFormat({rate, ch, 2, 16}) +
+// begin(EspUsbDeviceConfig{...}); see srv_EVDUsb.h in the original repo.
+//
+// Until that block is ported across, USB is compiled out rather than shipped
+// as something that looks like it works. Set EVD_HAS_USB_DEVICE_LIB to 1 in
+// EVDCTR.ino once the port is done.
 #if EVD_HAS_USB_DEVICE_LIB
 #if __has_include(<EspUsbDevice.h>)
 #include <EspUsbDevice.h>
@@ -25,6 +31,8 @@
 #define EVD_HAS_USB_DEVICE_LIB 0
 #pragma message("EVDCTR: EspUsbDevice.h not found, USB input disabled")
 #endif
+#else
+#pragma message("EVDCTR: USB input not ported yet (see EVDUsb.h), compiled out")
 #endif
 
 volatile int32_t gUsbHostVolumeDb256 = 0;

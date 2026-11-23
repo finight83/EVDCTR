@@ -92,6 +92,7 @@ volatile uint32_t gAvgEncodeUs               = 0;
 uint32_t statEncodeOverrunsThisSec = 0;
 uint32_t statEncodePeakUsThisSec   = 0;
 uint32_t statPendingBufDroppedThisSec = 0;
+uint32_t statPendingBufDroppedLastSec = 0;   // published once per second
 uint32_t statPendingBufPeakDepth      = 0;
 uint32_t statPendingBufPeakDepthLastSec = 0;
 uint32_t statDriftPpm = 0;

@@ -97,37 +97,71 @@ inline String sanitizeVersion(const String &in) {
 }
 
 // ---- Request-body accumulation --------------------------------------------
-// AsyncWebServer delivers a POST body in segments. Overlapping requests must
-// not share a buffer, so the accumulation is per-request: the first segment
-// allocates, later ones append, the handler frees. `slot` is the caller's
-// static String, which is safe because the AsyncTCP worker is single-threaded
-// and one request's segments are serialised.
+// AsyncWebServer delivers a POST body in segments, and several requests can be
+// in flight at once on the same AsyncTCP worker: a player's
+// POST /api/player/register every few seconds lands on the same worker as a
+// dashboard POST /api/config. A single `static String` here was therefore a
+// race: request B's first segment reset the buffer while request A was still
+// being accumulated, and A's handler parsed B's bytes.
+//
+// The buffer now lives on the request object (`request->_tempObject`), which
+// AsyncWebServer frees when the request is destroyed. It is never shared, so
+// overlapping requests cannot corrupt each other.
+//
+// Ownership: if the function returns true, the CALLER owns the buffer and must
+// release it with releaseReqBody(request). If it returns false the buffer has
+// already been released (and an error response sent, or a partial body
+// abandoned).
 inline bool accumulateReqBody(AsyncWebServerRequest *request,
                               const uint8_t *data, size_t len, size_t index,
                               size_t total, size_t cap,
                               const char *tooLargeJson,
                               const char *&bodyOut, size_t &lenOut) {
-  static String slot;
+  String *slot = (String *)request->_tempObject;
   if (index == 0) {
-    slot = "";
     if (total > cap) {
       request->send(413, "application/json", tooLargeJson);
       return false;
     }
-    slot.reserve(total + 1);
+    if (slot) { delete slot; request->_tempObject = nullptr; }
+    slot = new (std::nothrow) String();
+    if (!slot) {
+      request->send(500, "application/json", "{\"ok\":false,\"error\":\"no memory\"}");
+      return false;
+    }
+    request->_tempObject = slot;
+    slot->reserve(total + 1);
+  } else if (!slot) {
+    // A continuation with no head: the first segment was dropped (413) or this
+    // is a stray tail. Nothing to append to.
+    return false;
   }
-  if (slot.length() + len > cap) {
-    slot = "";
+
+  if (slot->length() + len > cap) {
+    request->_tempObject = nullptr;
+    delete slot;
     request->send(413, "application/json", tooLargeJson);
     return false;
   }
-  for (size_t i = 0; i < len; ++i) slot += (char)data[i];
+
+  // Bulk append: String::concat(const char*, n) copies n bytes in one pass.
+  slot->concat((const char *)data, len);
+
   if (index + len >= total) {
-    bodyOut = slot.c_str();
-    lenOut  = slot.length();
+    bodyOut = slot->c_str();
+    lenOut  = slot->length();
     return true;
   }
   return false;
+}
+
+// Hand the accumulated body back. Call once the handler has finished reading
+// bodyOut; nothing may touch bodyOut after this.
+inline void releaseReqBody(AsyncWebServerRequest *request) {
+  String *slot = (String *)request->_tempObject;
+  if (!slot) return;
+  request->_tempObject = nullptr;
+  delete slot;
 }
 
 // ---- Log ring writer -------------------------------------------------------

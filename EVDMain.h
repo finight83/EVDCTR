@@ -48,7 +48,11 @@ inline void serviceDeferredSettingsFlush() {
   if (!settingsDirty) return;
   if (millis() - settingsDirtySince < NVM_SAVE_DELAY_MS) return;
   settingsDirty = false;
-  saveWiFiSettings();
+  // Only the downlink settings are deferred on this board. Rewriting the WiFi
+  // credentials here meant a pairing change also rewrote ssid/pass - and if it
+  // ran while an in-flight /save had cleared the password field, it persisted
+  // an empty password. WiFi settings are saved by handleWiFiSave(), which is
+  // the only place that changes them.
   saveDownlinkSettings();     // the EVDSTR pairing address
 }
 

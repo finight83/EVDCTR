@@ -13,6 +13,12 @@
 WiFiUDP discoveryUdp;
 
 // ---- Settings load/save ----------------------------------------------------
+// Owned by EVDOTA.h, which is included later in the chain (it needs the HTTP
+// server that EVDRoutes.h owns). Declared here because the WiFi-settings guard
+// reads them.
+extern volatile bool otaInProgress;
+extern volatile bool otaUploadInProgress;
+
 inline void loadWiFiSettings() {
   PrefsGuard g("evdctr", true);
   if (!g.ok) { LOGW("NVS: cannot open evdctr namespace, using defaults"); return; }

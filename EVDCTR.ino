@@ -205,7 +205,12 @@ static_assert(OPUS_MAX_PACKET_BYTES == LINK_MAX_PAYLOAD,
 #define PENDING_MAX_FRAMES 4096
 
 // ---- USB Audio Class -------------------------------------------------------
-#define EVD_HAS_USB_DEVICE_LIB 1
+// 0 until EVDUsb.h is ported to the real EspUsbDevice API (see that file).
+// The "USB" input on the dashboard is reported as unavailable while this is 0.
+#define EVD_HAS_USB_DEVICE_LIB 0
+// Readable as a value at runtime, so a handler can refuse without #if inside a
+// function body.
+#define EVD_USB_INPUT_BUILT (EVD_HAS_USB_DEVICE_LIB != 0)
 #define EVD_USB_VID 0x303a
 #define EVD_USB_PID 0x40e1     // CTR PID; STR uses 0x40e2 so Windows keeps two
 
@@ -278,5 +283,6 @@ inline bool setup_i2s_in();
 #include "EVDUart.h"    // the source board's UART grammar
 #include "EVDUsb.h"
 #include "EVDOTA.h"     // route handlers EVDRoutes.h registers
+#include "EVDNTW.h"     // the /settings page served during AP fallback
 #include "EVDRoutes.h"
 #include "EVDMain.h"
