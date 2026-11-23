@@ -38,7 +38,12 @@ static const char EVDNTW_HTML[] PROGMEM = R"HTML(
   .chk{display:flex;gap:.6rem;align-items:center;margin-top:1rem}
   .chk input{width:auto;margin:0}
   .hidden{display:none!important}
+  .hint{color:var(--muted);font-size:.8rem;margin:4px 0 0}
+  .hint.bad{color:#ff5d5d}
+  .hint.ok{color:#37dba0}
+  .sugg{float:right;font-weight:400;font-size:.75rem;color:var(--accent);cursor:pointer}
   #status{margin-top:1rem;color:var(--muted)}
+  #status button{display:block;margin-top:6px}
 </style>
 </head>
 <body>
@@ -62,19 +67,66 @@ static const char EVDNTW_HTML[] PROGMEM = R"HTML(
 
   <label class="chk"><input id="static" type="checkbox" {{STATIC}}> Use a static IP</label>
   <div id="staticBox" class="{{STATICCLASS}}">
-    <label for="ip">IP address</label><input id="ip" value="{{IP}}">
-    <label for="gw">Gateway</label><input id="gw" value="{{GW}}">
-    <label for="sn">Subnet mask</label><input id="sn" value="{{SN}}">
-    <label for="dns">DNS</label><input id="dns" value="{{DNS}}">
+    <label for="ip">IP address</label>
+    <input id="ip" inputmode="decimal" autocomplete="off" placeholder="192.168.1.50" value="{{IP}}">
+    <div class="hint" id="ipmsg"></div>
+    <label for="gw">Gateway <span class="sugg" id="gwsugg"></span></label>
+    <input id="gw" inputmode="decimal" autocomplete="off" value="{{GW}}">
+    <label for="sn">Subnet mask <span class="sugg" id="snsugg"></span></label>
+    <input id="sn" inputmode="decimal" autocomplete="off" value="{{SN}}">
+    <label for="dns">DNS server <span class="sugg" id="dnssugg"></span></label>
+    <input id="dns" inputmode="decimal" autocomplete="off" value="{{DNS}}">
+    <small>The gateway, mask and DNS follow the address as you type. Tap a
+       suggestion to use it; edit any field to override it.</small>
   </div>
 
   <button type="submit">Save and restart</button>
   <div id="status"></div>
 </form>
 <script>
-document.getElementById('static').addEventListener('change', e => {
-  document.getElementById('staticBox').className = e.target.checked ? '' : 'hidden';
+// As the address is typed, the gateway, mask and DNS are offered and filled in
+// when they are still empty or still hold what was offered last. evdSuggest()
+// and evdIpCheck() come from EVDIpSuggest.h, injected below.
+var lastOffered = {gw:'', sn:'', dns:''};
+var $ = function(id){ return document.getElementById(id); };
+function showStatic(){
+  $('staticBox').className = $('static').checked ? '' : 'hidden';
+}
+function fillField(id, key, v){
+  if (!v) return;
+  var el = $(id);
+  if (!el.value.trim() || el.value.trim() === lastOffered[key]) {
+    el.value = v; lastOffered[key] = v;
+  }
+}
+function applySuggestion(force){
+  var s = evdSuggest($('ip').value.trim());
+  $('gw').placeholder = s.gw; $('sn').placeholder = s.mask; $('dns').placeholder = s.dns;
+  $('gwsugg').textContent = s.gw; $('snsugg').textContent = s.mask;
+  $('dnssugg').textContent = s.dns;
+  if (force || !$('gw').value.trim())  fillField('gw',  'gw',  s.gw);
+  if (force || !$('sn').value.trim())  fillField('sn',  'sn',  s.mask);
+  if (force || !$('dns').value.trim()) fillField('dns', 'dns', s.dns);
+  var msg = evdIpCheck($('ip').value.trim(), $('gw').value.trim(),
+                       $('sn').value.trim(), $('dns').value.trim());
+  var box = $('ipmsg');
+  box.textContent = msg || (s.usable ? '' : 'A mask this tight leaves no room for a gateway.');
+  box.className = 'hint ' + ((msg || !s.usable) ? 'bad' : 'ok');
+  return !msg && s.usable;
+}
+['gw','sn','dns'].forEach(function(id){
+  $(id + 'sugg').onclick = function(){ fillField(id, id, $(id).placeholder); applySuggestion(false); };
 });
+$('static').addEventListener('change', function(){
+  showStatic();
+  if ($('static').checked) applySuggestion(true);
+});
+$('ip').addEventListener('input', function(){ applySuggestion(false); });
+['gw','sn','dns'].forEach(function(id){
+  $(id).addEventListener('input', function(){ applySuggestion(false); });
+});
+if ($('static').checked) applySuggestion(false);
+
 async function scan(){
   const st = document.getElementById('status');
   st.textContent = 'Scanning...';
@@ -100,12 +152,17 @@ async function scan(){
 document.getElementById('f').addEventListener('submit', async e => {
   e.preventDefault();
   const st = document.getElementById('status');
+  const wantStatic = document.getElementById('static').checked;
+  if (wantStatic && !applySuggestion(false)) {
+    st.textContent = 'Fix the static IP settings first.';
+    return;
+  }
   st.textContent = 'Saving...';
   const body = {
     name:     document.getElementById('name').value,
     ssid:     document.getElementById('ssid').value,
     password: document.getElementById('pass').value,
-    static:   document.getElementById('static').checked,
+    static:   wantStatic,
     ip:       document.getElementById('ip').value,
     gateway:  document.getElementById('gw').value,
     subnet:   document.getElementById('sn').value,
@@ -118,6 +175,7 @@ document.getElementById('f').addEventListener('submit', async e => {
   st.textContent = r.ok ? 'Saved. Reconnecting...' : 'Failed: ' + (r.error || 'unknown');
 });
 </script>
+{{IPSUGGEST}}
 </body>
 </html>
 )HTML";
@@ -129,9 +187,12 @@ inline String networkSettingsPage() {
   page.replace("{{PASS}}", wifiPassword);
   page.replace("{{STATIC}}", useStaticIp ? "checked" : "");
   page.replace("{{STATICCLASS}}", useStaticIp ? "" : "hidden");
-  page.replace("{{IP}}", staticIp);
-  page.replace("{{GW}}", staticGateway);
-  page.replace("{{SN}}", staticSubnet);
-  page.replace("{{DNS}}", staticDns);
+  // Saved values first; the suggestion only fills what was never saved, so the
+  // operator is never shown a different address than the one stored.
+  page.replace("{{IP}}",  staticIp.length()      ? staticIp      : evdSuggestedIp());
+  page.replace("{{GW}}",  staticGateway.length() ? staticGateway : evdSuggestedGateway());
+  page.replace("{{SN}}",  staticSubnet.length()  ? staticSubnet  : evdSuggestedMask());
+  page.replace("{{DNS}}", staticDns.length()     ? staticDns     : evdSuggestedDns());
+  page.replace("{{IPSUGGEST}}", evdIpSuggestScripts(evdUsableIpv4(WiFi.localIP())));
   return page;
 }

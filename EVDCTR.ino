@@ -76,6 +76,9 @@
   EVDWiFi.h
       STA bring-up with AP fallback, mDNS, discovery responder, network test,
       WiFi scan endpoints, per-mode encoder presets in NVS.
+  EVDIpSuggest.h
+      The one implementation of "suggested" gateway/mask/DNS for a static IP:
+      a C++ copy for the server's validation, a JS copy for both pages.
   EVDLinkSpi.h
       SPI2 master half of the link. Owns SCLK/MOSI/IRQ out, CS in.
   EVDDownlink.h
@@ -136,8 +139,11 @@
 #include "opus.h"
 #include "EVDLink.h"
 // The dashboard is a PROGMEM gzip blob generated from EVDCTRL.h by gen_gz.py.
-// It must be visible to EVDRoutes.h, which serves it.
+// It must be visible to EVDRoutes.h, which serves it. The page source itself is
+// included as well: it is a String the route fills in per request (the
+// static-IP suggestion depends on the live network), not a constant blob.
 #include "EVDCTRL_GZ.h"
+#include "EVDCTRL.h"
 
 // ---- Pin assignments -------------------------------------------------------
 static const int pinBtLrc     = 15;
@@ -296,6 +302,7 @@ inline bool setup_i2s_in();
 // ============================================================================
 #include "EVDState.h"
 #include "EVDHelpers.h"
+#include "EVDIpSuggest.h"   // suggested gateway/mask/DNS for a static IP (reads staticIp)
 #include "EVDWiFi.h"
 #include "EVDLinkSpi.h"
 #include "EVDDownlink.h"

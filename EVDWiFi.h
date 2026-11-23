@@ -307,8 +307,17 @@ inline void handleNetworkState(AsyncWebServerRequest *request) {
                 "\",\"ip\":\""   + WiFi.localIP().toString() +
                 "\",\"ap\":\""   + (accessPointActive ? "true" : "false") +
                 "\",\"static\":" + (useStaticIp ? "true" : "false") +
-                ",\"gw\":\"" + staticGateway + "\",\"sn\":\"" + staticSubnet +
-                "\",\"dns\":\"" + staticDns + "\",\"rssi\":" + String(WiFi.RSSI()) + "}";
+                ",\"ip_static\":\"" + jsonEscape(staticIp) +
+                "\",\"gw\":\"" + jsonEscape(staticGateway) +
+                "\",\"sn\":\"" + jsonEscape(staticSubnet) +
+                "\",\"dns\":\"" + jsonEscape(staticDns) +
+                "\",\"sugg\":{\"ip\":\"" + evdSuggestedIp() +
+                "\",\"gw\":\"" + evdSuggestedGateway() +
+                "\",\"sn\":\"" + evdSuggestedMask() +
+                "\",\"dns\":\"" + evdSuggestedDns() +
+                "\",\"from\":\"" +
+                (evdUsableIpv4(WiFi.localIP()) ? "lease" : "saved") +
+                "\"},\"rssi\":" + String(WiFi.RSSI()) + "}";
   request->send(200, "application/json", json);
 }
 
@@ -339,6 +348,19 @@ inline void handleSaveNetworkSettings(AsyncWebServerRequest *request,
   if (in["gateway"].is<const char*>())  staticGateway= in["gateway"].as<String>();
   if (in["subnet"].is<const char*>())   staticSubnet = in["subnet"].as<String>();
   if (in["dns"].is<const char*>())      staticDns    = in["dns"].as<String>();
+
+  // A static configuration that cannot work is refused here, while the board
+  // is still reachable. Saved and restarted, it would come up with no address
+  // and no way back in except the serial port.
+  if (useStaticIp) {
+    staticIp.trim(); staticGateway.trim(); staticSubnet.trim(); staticDns.trim();
+    String bad = evdCheckStaticIp(staticIp, staticGateway, staticSubnet, staticDns);
+    if (bad.length()) {
+      request->send(400, "application/json",
+                    "{\"ok\":false,\"error\":\"" + jsonEscape(bad) + "\"}");
+      return;
+    }
+  }
 
   saveWiFiSettings();
   request->send(200, "application/json", "{\"ok\":true,\"restart\":true}");
