@@ -101,6 +101,19 @@ inline bool setupLinkSpi() {
   return true;
 }
 
+// The CS line is driven by EVDSTR and pulled up here, so a partner that is
+// present reads HIGH at idle and a missing one also reads HIGH - the useful
+// test is the traffic, not the level. This prints what the boot state actually
+// is, so "link IDLE" in the heartbeat is not the first sign of a problem.
+inline void logLinkPeerState(const char *when) {
+  int cs  = gpio_get_level((gpio_num_t)PIN_LINK_CS);
+  int irq = gpio_get_level((gpio_num_t)PIN_LINK_IRQ);
+  Serial.printf("[LINK] %s: CS(GPIO%d)=%d idle, IRQ(GPIO%d)=%d; "
+                "frames out %lu, dropped %lu\n",
+                when, PIN_LINK_CS, cs, PIN_LINK_IRQ, irq,
+                (unsigned long)statLinkSent, (unsigned long)statLinkDropped);
+}
+
 // ---- Frame send -------------------------------------------------------------
 // Blocks at most LINK_CS_TIMEOUT_US + LINK_XFER_TIMEOUT_US. Returns true when
 // STR clocked the whole frame. On false the caller must count a drop and move

@@ -144,10 +144,26 @@ inline void startSetupAccessPoint() {
   String apName = sanitizeServerName(serverName);
   if (!apName.length()) apName = "EVDCTR";
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(apName.c_str(), strlen(default_ap_password) ? default_ap_password : nullptr);
+  bool ok = WiFi.softAP(apName.c_str(),
+                        strlen(default_ap_password) ? default_ap_password : nullptr);
   accessPointActive = true;
+  if (!ok) {
+    // softAP() returning false is the one failure that leaves the board with
+    // no radio at all: no STA, no AP, nothing to open in a browser. Say it
+    // loudly rather than reporting an AP that is not there.
+    LOGE("WiFi: softAP('%s') FAILED - no access point is up; "
+         "reset the board and check the radio", apName.c_str());
+    Serial.printf("[WIFI] softAP FAILED for '%s'\n", apName.c_str());
+    return;
+  }
   LOGW("WiFi: STA failed, AP fallback '%s' at %s", apName.c_str(),
        WiFi.softAPIP().toString().c_str());
+  // Printed unconditionally: this is the line an operator reads in a serial
+  // monitor when they cannot see the board on their network.
+  Serial.printf("[WIFI] AP FALLBACK: ssid '%s', open (no password), "
+                "http://%s/  channel %d\n",
+                WiFi.softAPSSID().c_str(), WiFi.softAPIP().toString().c_str(),
+                (int)WiFi.channel());
 }
 
 // ---- STA bring-up ----------------------------------------------------------

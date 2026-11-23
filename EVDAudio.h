@@ -655,12 +655,39 @@ inline void audioEncodeTask(void *) {
 }
 
 // ---- setup -----------------------------------------------------------------
+// Prints the encoder's own counters once every 5 s while nothing else is
+// consuming them. Cheap: four volatile reads and one line.
+inline void encodeProbeTask(void *) {
+  uint32_t lastEnc = 0, lastSent = 0, lastDrop = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    uint32_t enc  = statOpusEncoded;
+    uint32_t sent = statLinkSent;
+    uint32_t drop = statLinkDropped;
+    Serial.printf("[ENC] %lu frames in 5 s (%.1f fps) | link out +%lu "
+                  "dropped +%lu | %s\n",
+                  (unsigned long)(enc - lastEnc),
+                  (double)(enc - lastEnc) / 5.0,
+                  (unsigned long)(sent - lastSent),
+                  (unsigned long)(drop - lastDrop),
+                  gLinkHealthy ? "EVDSTR clocking frames"
+                               : "no EVDSTR clocking - frames are being dropped");
+    lastEnc = enc; lastSent = sent; lastDrop = drop;
+  }
+}
+
 inline void setup_queues_and_tasks() {
   LOGI("Creating queues and tasks...");
   rawQueue    = xQueueCreate(RAW_QUEUE_LEN,    sizeof(RawChunk));
   encodeQueue = xQueueCreate(ENCODE_QUEUE_LEN, sizeof(EncodeFrame));
   opusQueue   = xQueueCreate(OPUS_QUEUE_LEN,   sizeof(OpusPacket));
   if (!rawQueue || !encodeQueue || !opusQueue) {
+    // Name which one: an out-of-DRAM boot is the usual cause, and the fix
+    // differs (RAW_QUEUE_LEN vs ENCODE_QUEUE_LEN).
+    Serial.printf("[TASK] queue creation FAILED: raw=%s enc=%s opus=%s "
+                  "(free heap %u B) - no audio will flow\n",
+                  rawQueue ? "ok" : "NULL", encodeQueue ? "ok" : "NULL",
+                  opusQueue ? "ok" : "NULL", (unsigned)ESP.getFreeHeap());
     LOGE("queue creation failed");
     return;
   }
@@ -669,16 +696,32 @@ inline void setup_queues_and_tasks() {
   // Core 0: capture and pre-processing.
   rc = xTaskCreatePinnedToCore(audioReadTask, "audioRead", 4096, nullptr, 4,
                                nullptr, 0);
-  if (rc != pdPASS) LOGE("FAILED to create audioReadTask (%d)", (int)rc);
+  if (rc != pdPASS) { LOGE("FAILED to create audioReadTask (%d)", (int)rc);
+                      Serial.printf("[TASK] audioRead  FAILED (%d)\n", (int)rc); }
 
   rc = xTaskCreatePinnedToCore(audioProcessingTask, "audioProc", 8192, nullptr,
                                2, nullptr, 0);
-  if (rc != pdPASS) LOGE("FAILED to create audioProcessingTask (%d)", (int)rc);
+  if (rc != pdPASS) { LOGE("FAILED to create audioProcessingTask (%d)", (int)rc);
+                      Serial.printf("[TASK] audioProc  FAILED (%d)\n", (int)rc); }
 
   // Core 1: encode + link send. Sole occupant, by design.
   rc = xTaskCreatePinnedToCore(audioEncodeTask, "audioEncode", 8192, nullptr,
                                5, nullptr, 1);
-  if (rc != pdPASS) LOGE("FAILED to create audioEncodeTask (%d)", (int)rc);
+  if (rc != pdPASS) { LOGE("FAILED to create audioEncodeTask (%d)", (int)rc);
+                      Serial.printf("[TASK] audioEncode FAILED (%d)\n", (int)rc); }
 
+  // ---- Standalone proof ----------------------------------------------------
+  // With no EVDSTR on the other end of the pin link, the encoder still runs -
+  // and its output is dropped on the wire. That is correct, but it makes a
+  // board with no partner look identical to a board with nothing to encode.
+  // Count what the encoder actually produced and report it every 5 s, so a
+  // lone EVDCTR proves its whole capture -> resample -> opus chain in a serial
+  // monitor without a second board.
+  rc = xTaskCreatePinnedToCore(encodeProbeTask, "encProbe", 3072, nullptr,
+                               1, nullptr, 0);
+  if (rc != pdPASS) LOGE("FAILED to create encodeProbeTask (%d)", (int)rc);
+
+  Serial.printf("[TASK] core 0: audioRead(p4) audioProc(p2) http dlna | "
+                "core 1: audioEncode(p5)\n");
   LOGI("Task layout: core 0 = read/proc/HTTP/DLNA, core 1 = encode only");
 }
