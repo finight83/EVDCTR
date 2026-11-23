@@ -119,6 +119,16 @@ function applySuggestion(force){
 });
 $('static').addEventListener('change', function(){
   showStatic();
+  // Reveal on the suggested address when the field was never filled in: the
+  // page's own copy of the addresses arrives with the request, and a blank
+  // field here means "nothing saved".
+  if ($('static').checked && !$('ip').value.trim()) {
+    var pre = window.EVD_IP_PRESET || {};
+    $('ip').value = pre.ip || '';
+    if (!$('gw').value.trim())  $('gw').value  = pre.gw  || '';
+    if (!$('sn').value.trim())  $('sn').value  = pre.mask || '';
+    if (!$('dns').value.trim()) $('dns').value = pre.dns || '';
+  }
   if ($('static').checked) applySuggestion(true);
 });
 $('ip').addEventListener('input', function(){ applySuggestion(false); });
