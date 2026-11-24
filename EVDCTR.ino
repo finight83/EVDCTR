@@ -1,6 +1,8 @@
 // ---- Versioning ------------------------------------------------------------
+// Always update this field with latest patch updates
 #ifndef EVD_FW_VERSION
-#define EVD_FW_VERSION "1.0.0.0" // EVDCTR: capture side of the split Enkelvoud server
+#define EVD_FW_VERSION "1.0.0.0" 
+// EVDCTR: capture side of the split Enkelvoud server
 #endif
 #define FW_VERSION EVD_FW_VERSION
 
