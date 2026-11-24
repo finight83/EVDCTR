@@ -48,17 +48,6 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
   .muted{color:var(--muted)}
   .num{font-variant-numeric:tabular-nums}
   .card.wide{grid-column:1/-1}
-  /* Static-IP block on the Network tab: a tick box that reveals four fields. */
-  label.chk{display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer}
-  label.chk input{width:auto;margin:0;flex:0 0 auto}
-  #n-staticbox{margin-top:2px}
-  #n-staticbox.off{display:none}
-  .hint{font-size:.78rem;margin:4px 0 0}
-  .hint.bad{color:var(--bad)} .hint.ok{color:var(--good)}
-  .sugg{float:right;font-weight:400;font-size:.72rem;color:var(--accent);
-        text-transform:none;letter-spacing:0;cursor:pointer}
-  .sugg:hover{text-decoration:underline}
-  button.act.small{margin-top:8px;padding:6px 12px;font-size:.8rem}
   .linkrow{display:flex;flex-wrap:wrap;gap:10px}
   .linkbox{flex:1 1 110px;background:#09090c;border:1px solid var(--line);
            border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
@@ -225,24 +214,7 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
         <label>Board name</label><input id="n-name" type="text">
         <label>SSID</label><input id="n-ssid" type="text">
         <label>Password</label><input id="n-pass" type="text">
-        <label class="chk"><input type="checkbox" id="n-static">
-          <span>Use a static IP</span></label>
-        <p class="muted hint" id="n-iphint"></p>
-        <div id="n-staticbox">
-          <label>IP address</label>
-          <input id="n-ip" type="text" inputmode="decimal" autocomplete="off"
-                 placeholder="192.168.1.50">
-          <div class="muted hint" id="n-ipmsg"></div>
-          <label>Gateway <span class="sugg" id="n-gwsugg"></span></label>
-          <input id="n-gw" type="text" inputmode="decimal" autocomplete="off">
-          <label>Subnet mask <span class="sugg" id="n-snsugg"></span></label>
-          <input id="n-sn" type="text" inputmode="decimal" autocomplete="off">
-          <label>DNS server <span class="sugg" id="n-dnssugg"></span></label>
-          <input id="n-dns" type="text" inputmode="decimal" autocomplete="off">
-          <button class="act ghost" id="n-suggest" type="button">Suggest from current network</button>
-        </div>
         <button class="act" id="n-save">Save and restart</button>
-        <div class="muted hint" id="n-savemsg"></div>
       </div>
     </div>
   </section>
@@ -273,8 +245,6 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
 
   <section id="t-log"><pre id="log">-</pre></section>
 </main>
-
-{{IPSUGGEST}}
 
 <script>
 const $ = s => document.querySelector(s);
@@ -605,87 +575,7 @@ async function loadNet() {
   const focusId = document.activeElement ? document.activeElement.id : '';
   if (focusId !== 'n-name') $('#n-name').value = n.name || '';
   if (focusId !== 'n-ssid') $('#n-ssid').value = n.ssid || '';
-  fillStaticFields(n);
 }
-
-// ---- Static IP ------------------------------------------------------------
-// The tick box reveals the four fields. The IP field drives the rest: as it is
-// typed, gateway / subnet / DNS are offered as placeholders and filled in when
-// they are empty (or when they are still the suggestion last offered, so the
-// operator's own edit is never overwritten). evdSuggest()/evdIpCheck() live in
-// EVDIpSuggest.h, which the board injects into this page.
-// Loaded once: every later loadNet() would otherwise reset the tick box and the
-// fields to the saved values while the operator is still editing them.
-let netLoaded = false;
-const staticOn = () => $('#n-static').checked;
-function suggestNow() { return evdSuggest($('#n-ip').value.trim()); }
-function showStatic() {
-  $('#n-staticbox').className = staticOn() ? '' : 'off';
-}
-// Write a value into a field unless the operator has put something of their own
-// there. `lastOffered` remembers what we filled in last time.
-const lastOffered = { gw: '', sn: '', dns: '' };
-function fillField(id, key, v) {
-  const el = $(id);
-  if (!v) return;
-  if (!el.value.trim() || el.value.trim() === lastOffered[key]) {
-    el.value = v; lastOffered[key] = v;
-  }
-}
-function applySuggestion(force) {
-  const s = suggestNow();
-  // The placeholders and the inline suggestions are the authority; they are
-  // updated even when a field holds the operator's own value.
-  $('#n-gw').placeholder  = s.gw;
-  $('#n-sn').placeholder  = s.mask;
-  $('#n-dns').placeholder = s.dns;
-  $('#n-gwsugg').textContent  = s.gw;
-  $('#n-snsugg').textContent  = s.mask;
-  $('#n-dnssugg').textContent = s.dns;
-  // Fill a field when it is empty, when it already equals the suggestion (so
-  // "Suggest from current network" is an idempotent no-op), or when forced.
-  const stale = (id, v) => force || !$(id).value.trim() || $(id).value.trim() === v;
-  if (stale('#n-gw',  s.gw))   fillField('#n-gw',  'gw',  s.gw);
-  if (stale('#n-sn',  s.mask)) fillField('#n-sn',  'sn',  s.mask);
-  if (stale('#n-dns', s.dns))  fillField('#n-dns', 'dns', s.dns);
-  const msg = evdIpCheck($('#n-ip').value.trim(), $('#n-gw').value.trim(),
-                         $('#n-sn').value.trim(), $('#n-dns').value.trim());
-  const box = $('#n-ipmsg');
-  box.textContent = msg || (s.usable ? '' : 'A mask this tight leaves no room for a gateway.');
-  box.className = 'hint ' + ((msg || !s.usable) ? 'bad' : 'ok');
-  return !msg && s.usable;
-}
-// First time the tab sees a board state: put in the saved values, or the
-// suggestion when nothing was saved yet. Never while the operator is typing.
-function fillStaticFields(n) {
-  if (netLoaded) return;
-  const focusId = document.activeElement ? document.activeElement.id : '';
-  if (focusId.indexOf('n-') === 0 && focusId !== 'n-name' && focusId !== 'n-ssid')
-    return;
-  netLoaded = true;
-  const st = (n.static === true || n.static === 'true');
-  $('#n-static').checked = st;
-  showStatic();
-  if (!st) return;
-  const put = (id, v) => { if (v && !$(id).value.trim()) $(id).value = v; };
-  put('#n-ip', n.ip_static);
-  put('#n-gw', n.gw);
-  put('#n-sn', n.sn);
-  put('#n-dns', n.dns);
-  applySuggestion(false);
-}
-on('#n-static', 'change', () => {
-  showStatic();
-  if (staticOn() && !$('#n-ip').value.trim()) {
-    $('#n-ip').value = evdSuggest('').ip || '';
-    if (!$('#n-ip').value) $('#n-ip').value = (window.EVD_IP_PRESET || {}).ip || '';
-  }
-  if (staticOn()) applySuggestion(true);
-});
-on('#n-ip', 'input', () => applySuggestion(false));
-['#n-gw', '#n-sn', '#n-dns'].forEach(id =>
-  on(id, 'input', () => applySuggestion(false)));
-on('#n-suggest', 'click', () => applySuggestion(true));
 on('#nettest', 'click', async () => {
   $('#nettestout').textContent = 'testing...';
   await j('/api/network-test?start=1');
@@ -700,32 +590,10 @@ on('#restart', 'click', () => txt('/api/restart', {}));
 // The handler reads `password`; the AP setup page uses the same name. An empty
 // field with an unchanged SSID means "keep the stored password".
 on('#n-save', 'click', async () => {
-  if (staticOn() && !applySuggestion(false)) {
-    $('#n-savemsg').textContent = 'Fix the static IP settings first.';
-    $('#n-savemsg').className = 'hint bad';
-    return;
-  }
-  $('#n-savemsg').textContent = 'saving...';
-  const body = { name: $('#n-name').value,
-    ssid: $('#n-ssid').value, password: $('#n-pass').value };
-  if (staticOn()) {
-    body.static   = true;
-    body.ip       = $('#n-ip').value.trim();
-    body.gateway  = $('#n-gw').value.trim();
-    body.subnet   = $('#n-sn').value.trim();
-    body.dns      = $('#n-dns').value.trim();
-  }
-  const r = await post('/save', body).catch(e => ({ error: String(e) }));
-  if (r && r.ok === false) {
-    // The board refuses an unusable static configuration instead of saving it
-    // and disappearing; keep the operator on the page with the reason.
-    $('#n-savemsg').textContent = r.error || 'save failed';
-    $('#n-savemsg').className = 'hint bad';
-    return;
-  }
+  await post('/save', { name: $('#n-name').value,
+    ssid: $('#n-ssid').value, password: $('#n-pass').value }).catch(e => err(e));
   // The board restarts itself 200 ms after answering; say so rather than
   // leaving the page looking as if nothing happened.
-  $('#n-savemsg').textContent = 'saved; the board restarts in a moment';
   $('#nettestout').textContent = 'saving... the board restarts in a moment, ' +
     'then reload http://' + (sanitizeHost($('#n-name').value) || 'evdctr') + '.local/';
 });

@@ -126,14 +126,20 @@ inline bool linkSendFrame(const uint8_t *payload, uint32_t len,
 
   LinkFrameHeader h;
   linkFillHeader(h, samples, channels, rateHz, silence);
-  const uint32_t total = LINK_HDR_BYTES + len;
 
-  // One transaction, header then payload back to back, so STR clocks exactly
-  // `total` bytes after raising CS. Two transactions would leave a gap in the
-  // clock that STR cannot tell from the end of the frame.
-  static uint8_t txBuf[LINK_HDR_BYTES + LINK_MAX_PAYLOAD];
+  // [link-fixed-frame] Always clock the FULL frame, not header+len.
+  //
+  // The slave cannot queue a variable-length transaction: it must arm one
+  // before it knows the payload length, so it arms LINK_WIRE_BYTES and reads
+  // the length out of the header afterwards. Sending only len bytes would
+  // leave the slave's armed transaction short by (LINK_MAX_PAYLOAD - len) and
+  // every frame would time out. The padding is zero-filled and never parsed.
+  static uint8_t txBuf[LINK_WIRE_BYTES];
   memcpy(txBuf, &h, LINK_HDR_BYTES);
   if (len) memcpy(txBuf + LINK_HDR_BYTES, payload, len);
+  if (len < LINK_MAX_PAYLOAD)
+    memset(txBuf + LINK_HDR_BYTES + len, 0, LINK_MAX_PAYLOAD - len);
+  const uint32_t total = LINK_WIRE_BYTES;
 
   // 1. Announce. The setup delay matters: STR runs a GPIO ISR or a tight
   //    poll, and the edge must be visible before the first SCLK byte leaves.

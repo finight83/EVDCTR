@@ -410,12 +410,9 @@ inline void handleApiConfigRelay(AsyncWebServerRequest *request,
 inline void setup_http_server() {
   // ---- dashboard ----
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    // The dashboard's gzip blob is generated from EVDCTRL.h by gen_gz.py. The
-    // static-IP suggestion script is injected here rather than into the blob,
-    // so it is built from the live network context on every request.
-    String page = String(EVDCTRL_HTML);
-    page.replace("{{IPSUGGEST}}", evdIpSuggestScripts(evdUsableIpv4(WiFi.localIP())));
-    AsyncWebServerResponse *res = request->beginResponse(200, "text/html", page);
+    AsyncWebServerResponse *res = request->beginResponse_P(
+        200, "text/html", EVDCTRL_GZ, EVDCTRL_GZ_LEN);
+    res->addHeader("Content-Encoding", "gzip");
     res->addHeader("Cache-Control", "no-store, max-age=0");
     request->send(res);
   });

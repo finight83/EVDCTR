@@ -638,6 +638,12 @@ inline void audioEncodeTask(void *) {
     pkt.samples = ef.samples;
     bool ok = linkSendFrame(pkt.data, (uint32_t)nbytes, (uint8_t)ef.samples,
                             CHANNELS, g_opusSampleRate, false);
+    // [link-silence-keepalive] Deliberately no silence frame on the drop path
+    // below: EVDSTR treats a missing frame as "producer stopped" and its pacer
+    // re-anchors, which is the behaviour the players' concealment is built
+    // around. Sending a 0-length frame every 20 ms instead would keep the
+    // schedule but would also tell EVDSTR "all is well" while the encoder is
+    // failing, hiding exactly the fault this link has to report.
     if (ok) {
       statOpusEncoded++;
       statLinkSent = gLinkFramesSent;
