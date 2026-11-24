@@ -28,7 +28,7 @@
 #define DLNA_SSDP_ADDR "239.255.255.250"
 
 WiFiUDP dlnaSsdpUdp;
-volatile bool dlnaFetchRunning = false;
+bool dlnaFetchRunning = false;
 String        dlnaCurrentUri   = "";
 String        dlnaCurrentTitle = "";
 
@@ -430,8 +430,9 @@ inline void dlnaHandleSoap(AsyncWebServerRequest *request, const String &soap,
                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
                "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">"
                "<s:Body><u:Response xmlns:u=\"urn:schemas-upnp-org:service:" +
-               String(service == "avt" ? "AVTransport" :
-                      service == "rcs" ? "RenderingControl" : "ConnectionManager") +
+               String(strcmp(service, "avt") == 0 ? "AVTransport" :
+                      strcmp(service, "rcs") == 0 ? "RenderingControl"
+                                                  : "ConnectionManager") +
                ":1\">" + result + "</u:Response></s:Body></s:Envelope>";
   request->send(200, "text/xml; charset=\"utf-8\"", out);
 }

@@ -14,8 +14,9 @@
   EVDCTR is the old EnkelvoudServer with its network *audio* role removed.
   It captures, pre-processes and encodes; it does not know what a player is,
   never opens AUDIO_UDP_PORT, and never speaks the player protocol. Everything
-  that reaches a player crosses the pin link in EVDDownlink.h as one Opus frame
-  per 20 ms, and EVDSTR puts it on the wire.
+  that reaches a player crosses the pin link in EVDLinkSpi.h as one Opus frame
+  per 20 ms, and EVDSTR puts it on the wire. EVDDownlink.h is the *control*
+  plane - an HTTP relay to STR - not the audio path.
 
   ============================ Core policy ==================================
 
@@ -28,9 +29,11 @@
     audioRead    pri 4     I2S DMA drain, USB read, or network yield
     audioProc    pri 2     rate estimate, two-stage resample, quiet, volume
     dlnaSsdp     pri 2     SSDP announce/respond
-    dlnaFetch    pri 2     HTTP WAV pull for DLNA (moved here from core 1)
-    netLink      pri 1     deferred socket writes for outbound control
+    dlnaFetch    pri 2     HTTP WAV pull for DLNA
+    encProbe     pri 1     counters-only: proves the encode chain with no STR
     loop()       pri 1     factory reset, pot, discovery, NVS flush, OTA
+    (no netLink task exists: outbound control is a synchronous HTTPClient
+     call from the route handler, bounded at 1.5 s)
 
   CORE 1 - opus_encode() ONLY:
     audioEncode  pri 5     xQueueReceive(encodeQueue) -> opus_encode()
@@ -47,11 +50,12 @@
 
   - udpSendTask (the Opus -> subscribers pacer) is GONE. EVDSTR owns it.
   - The subscriber table, playerNodes, zones, node perf and every
-    player-facing route (/api/player/*, /api/node_stats, /api/zones/*,
+    player-facing route (/api/player/x, /api/node_stats, /api/zones/x,
     /api/config, /api/source, /api/cmd) are GONE from this board.
   - OTA no longer pushes to nodes or to a source board over UART; that was a
-    network job. CTR updates itself and can push a new image to STR over the
-    link (see EVDDownlink.h, linkControlPoll()).
+    network job. CTR updates itself, and a new STR image is uploaded to CTR
+    and pushed to STR over WiFi as an HTTP multipart POST (EVDOTA.h) - not
+    over the pin link, which carries audio only.
   - The audio pacer (EVDPacer.h) is GONE: it exists to keep an absolute send
     schedule, and the send schedule now lives on STR.
 
@@ -79,10 +83,10 @@
   EVDLinkSpi.h
       SPI2 master half of the link. Owns SCLK/MOSI/IRQ out, CS in.
   EVDDownlink.h
-      The CTR-side face of the link: the linkQueue, the control-plane
-      requests CTR forwards to STR (zones, player list, config pushes) and
-      the replies it caches for the dashboard. See the file header for the
-      exact request/response set.
+      The CTR-side face of the link: the HTTP relay that forwards operator
+      requests to STR (zones, player list, config pushes) and caches the
+      replies for the dashboard. There is no linkQueue - the pin link is
+      audio only, and the control plane is HTTP. See the file header.
   EVDAudio.h
       Resampler, quiet filters, anti-alias, setup_opus, audioReadTask,
       audioProcessingTask, audioEncodeTask (core 1, encode + link send only).
@@ -92,9 +96,15 @@
   EVDUsb.h
       USB Audio Class input (unchanged role).
   EVDRoutes.h
-      Route table: dashboard, /api/state, /api/stats, /api/log/*, network,
-      OTA, DLNA, encoding controls, and the /api/link/* control plane that
+      Route table: dashboard, /api/state, /api/stats, /api/log/x, network,
+      OTA, DLNA, encoding controls, and the /api/link/x control plane that
       proxies to STR.
+  EVDOTA.h
+      CTR self-update (multipart upload + /api/ota/apply), and the push of a
+      new EVDSTR image to STR over WiFi. Spooled to LittleFS, not the link.
+  EVDUart.h
+      The source board's UART: RX line assembly, source requests, BT list and
+      OTA forwarding to the ESP32 source board.
   EVDMain.h
       setup() / loop().
 
@@ -237,7 +247,7 @@ static_assert(OPUS_MAX_PACKET_BYTES == LINK_MAX_PAYLOAD,
 
 // ---- Logging ---------------------------------------------------------------
 #define LOG_BAUD 115200
-extern volatile uint8_t gSerialLogLevel;
+extern uint8_t gSerialLogLevel;
 inline void evdLogPrintf(char level, const char *fmt, ...);
 #define LOGI(fmt, ...) do { if (gSerialLogLevel >= 3) evdLogPrintf('I', fmt, ##__VA_ARGS__); } while (0)
 #define LOGW(fmt, ...) do { if (gSerialLogLevel >= 2) evdLogPrintf('W', fmt, ##__VA_ARGS__); } while (0)

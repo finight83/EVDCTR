@@ -74,10 +74,10 @@
 
 // ---- Host volume / mute mirrors -------------------------------------------
 // Written from audioReadTask only, read by /api/state for diagnostics.
-volatile int16_t gUsbHostVolumeDb256      = 0;      // 1/256 dB, 0 = full scale
-volatile bool    gUsbHostMuted            = false;
-volatile bool    gUsbHostHasEverSetVolume = false;  // host has moved the slider
-volatile bool    gUsbStreaming            = false;  // PCM has arrived recently
+int16_t gUsbHostVolumeDb256      = 0;      // 1/256 dB, 0 = full scale
+bool    gUsbHostMuted            = false;
+bool    gUsbHostHasEverSetVolume = false;  // host has moved the slider
+bool    gUsbStreaming            = false;  // PCM has arrived recently
 
 #if EVD_HAS_USB_DEVICE_LIB
 
@@ -102,9 +102,10 @@ inline const char *usbLastError() { return gUsbLastError; }
 // /api/state, nothing to reset it with. begin() cannot be interrupted, but the
 // rest of the firmware can notice it and say so, and a later switch can take
 // the controller down and start again instead of queueing behind a dead task.
-static volatile bool     gUsbStarting     = false;
-static volatile uint32_t gUsbStartBeganMs = 0;
-static volatile bool     gUsbAbortRequest = false;
+static bool     gUsbStarting     = false;
+static uint32_t gUsbStartBeganMs = 0;
+// (gUsbAbortRequest removed: nothing ever read it. A stuck bring-up is
+// detected by usbBringUpStuck() and reported, which is what actually works.)
 
 inline bool usbBringUpStuck() {
   return gUsbStarting && (millis() - gUsbStartBeganMs) > 8000;

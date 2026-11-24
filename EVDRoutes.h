@@ -410,7 +410,9 @@ inline void handleApiConfigRelay(AsyncWebServerRequest *request,
 inline void setup_http_server() {
   // ---- dashboard ----
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *res = request->beginResponse_P(
+    // beginResponse_P() is deprecated in ESP Async WebServer 3.12: the
+    // non-_P overload does exactly this, the array is already in flash.
+    AsyncWebServerResponse *res = request->beginResponse(
         200, "text/html", EVDCTRL_GZ, EVDCTRL_GZ_LEN);
     res->addHeader("Content-Encoding", "gzip");
     res->addHeader("Cache-Control", "no-store, max-age=0");
@@ -419,7 +421,8 @@ inline void setup_http_server() {
 
   // ---- network setup ----
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send_P(200, "text/html", networkSettingsPage().c_str());
+    // send_P() is deprecated in 3.12; a String body is the supported path.
+    request->send(200, "text/html", networkSettingsPage());
   });
   server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request) {
     // Body-less form post: the dashboard posts JSON to /api/network/save.
@@ -500,9 +503,9 @@ inline void setup_http_server() {
 
   // ---- DLNA ----
   server.on("/description.xml",   HTTP_GET, dlnaHandleDescription);
-  server.on("/upnp/scpd/avt.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send_P(200, "text/xml", DLNA_SCPD_AVT); });
-  server.on("/upnp/scpd/rcs.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send_P(200, "text/xml", DLNA_SCPD_RCS); });
-  server.on("/upnp/scpd/cms.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send_P(200, "text/xml", DLNA_SCPD_CMS); });
+  server.on("/upnp/scpd/avt.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send(200, "text/xml", DLNA_SCPD_AVT); });
+  server.on("/upnp/scpd/rcs.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send(200, "text/xml", DLNA_SCPD_RCS); });
+  server.on("/upnp/scpd/cms.xml", HTTP_GET, [](AsyncWebServerRequest *r) { r->send(200, "text/xml", DLNA_SCPD_CMS); });
   server.on("/upnp/control/avt", HTTP_POST,
     [](AsyncWebServerRequest *r) {},
     nullptr,

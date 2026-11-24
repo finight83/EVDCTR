@@ -49,7 +49,7 @@
 #define LINK_SPI_HOST SPI2_HOST
 
 static spi_device_handle_t gLinkSpi = nullptr;
-static volatile bool       gLinkUp   = false;
+static bool       gLinkUp   = false;
 static uint32_t            gLinkFramesSent     = 0;
 static uint32_t            gLinkFramesDropped  = 0;
 static uint32_t            gLinkCsTimeouts     = 0;
@@ -114,6 +114,21 @@ inline void logLinkPeerState(const char *when) {
                 (unsigned long)statLinkSent, (unsigned long)statLinkDropped);
 }
 
+// ---- Link health ------------------------------------------------------------
+// [link-health-stale] The dashboard and the watchdog read gLinkHealthy, which
+// was cleared only on a FAILED send. When the encoder stops producing there is
+// no send to fail, so a dead or unplugged EVDSTR kept reading "link UP" while
+// nothing crossed the wire. Health is now a function of time since the last
+// good frame, not of the last attempt.
+static const uint32_t LINK_HEALTH_STALE_MS = 1000;
+
+inline void serviceLinkHealth() {
+  if (!gLinkHealthy) return;
+  if (gLinkLastOkMs && (millis() - gLinkLastOkMs) > LINK_HEALTH_STALE_MS) {
+    gLinkHealthy = false;
+  }
+}
+
 // ---- Frame send -------------------------------------------------------------
 // Blocks at most LINK_CS_TIMEOUT_US + LINK_XFER_TIMEOUT_US. Returns true when
 // STR clocked the whole frame. On false the caller must count a drop and move
@@ -141,8 +156,9 @@ inline bool linkSendFrame(const uint8_t *payload, uint32_t len,
     memset(txBuf + LINK_HDR_BYTES + len, 0, LINK_MAX_PAYLOAD - len);
   const uint32_t total = LINK_WIRE_BYTES;
 
-  // 1. Announce. The setup delay matters: STR runs a GPIO ISR or a tight
-  //    poll, and the edge must be visible before the first SCLK byte leaves.
+  // 1. Announce. STR polls this pin at task level (audioLinkTask, core 0), so
+  //    the edge must be visible before the first SCLK byte leaves; the setup
+  //    delay is what gives it time to come round and collect the frame.
   gpio_set_level((gpio_num_t)PIN_LINK_IRQ, 1);
   delayMicroseconds(LINK_IRQ_SETUP_US);
 
@@ -158,7 +174,8 @@ inline bool linkSendFrame(const uint8_t *payload, uint32_t len,
   }
 
   // 3. Clock it out. spi_device_polling_transmit() returns when the last bit
-  //    has left the shifter, which is the earliest point STR can raise CS.
+  //    has left the shifter. STR raises CS itself once it has collected the
+  //    transaction, which is what step 5 waits for.
   spi_transaction_t t = {};
   t.length    = total * 8;          // in bits
   t.tx_buffer = txBuf;
@@ -173,9 +190,11 @@ inline bool linkSendFrame(const uint8_t *payload, uint32_t len,
 
   if (rc != ESP_OK) { gLinkFramesDropped++; return false; }
 
-  // 5. The real confirmation: STR raises CS only after it has taken every
-  //    byte. If CS is still low, STR aborted mid-frame (CRC of its own, heap
-  //    failure, reset) and this frame is gone.
+  // 5. The real confirmation. CS is driven by STR (the slave owns it on this
+  //    link), so it is still low while STR is between "byte in" and "result
+  //    collected". If it does not rise, STR did not collect the transaction -
+  //    it is wedged, rebooting, or its SPI driver rejected the frame - and
+  //    this frame is gone. A stuck CS costs one frame, not the stream.
   const uint32_t tDone = micros();
   while (gpio_get_level((gpio_num_t)PIN_LINK_CS) == 0) {
     if ((uint32_t)(micros() - tDone) > LINK_XFER_TIMEOUT_US) {
@@ -185,5 +204,10 @@ inline bool linkSendFrame(const uint8_t *payload, uint32_t len,
   }
 
   gLinkFramesSent++;
+  // [link-silence-count] statLinkSilence was declared and exported in
+  // /api/state but never written, so it always read 0. EVDSTR counts silence
+  // frames too, and the two boards disagreeing on the same counter is worse
+  // than not having it.
+  if (silence) statLinkSilence++;
   return true;
 }
