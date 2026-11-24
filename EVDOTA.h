@@ -23,8 +23,8 @@
 #include <LittleFS.h>
 #include <HTTPClient.h>
 
-volatile bool otaUploadInProgress = false;
-volatile bool otaInProgress       = false;
+bool otaUploadInProgress = false;
+bool otaInProgress       = false;
 bool          otaUploadFailed     = false;
 String        otaUploadMessage    = "";
 
@@ -147,7 +147,10 @@ static bool otaPushSpoolToStr() {
   bool ok = false;
   HTTPClient http;
   http.setConnectTimeout(5000);
-  http.setTimeout(120000);            // a 2 MB POST over WiFi takes a while
+  // [ota-timeout-wrap] HTTPClient::setTimeout() takes a uint16_t, so 120000
+  // wrapped to 54464 ms - the "long" timeout was silently half of what the
+  // comment promised, and a slow 2 MB POST to EVDSTR failed as a timeout.
+  http.setTimeout(60000);             // 60 s, the most the API can express
   if (http.begin(String("http://") + strHost + "/api/ota/upload")) {
     http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
     int c = http.POST(buf, total);

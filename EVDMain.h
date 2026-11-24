@@ -327,6 +327,7 @@ void loop() {
     usbStuckReported = false;
   }
   serviceDeferredSettingsFlush();
+  serviceLinkHealth();
   serviceLinkWatchdog();
 
   // Refresh the STR summary at 2 s. Cheap (one small GET) and it is what the

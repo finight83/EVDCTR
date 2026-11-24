@@ -648,6 +648,10 @@ inline void audioEncodeTask(void *) {
       statOpusEncoded++;
       statLinkSent = gLinkFramesSent;
       gLinkLastOkMs = millis();
+      // [link-health-stale] gLinkHealthy was only ever cleared on a FAILED
+      // send. If the encoder stops producing (source gone, mute, encoder
+      // error) no send is attempted, so the flag stayed true forever and both
+      // the dashboard and serviceLinkWatchdog() reported a dead link as up.
       gLinkHealthy  = true;
       // Published for the Stream tab: how long the SPI transfer itself took.
       statLinkLastFrameUs = gLinkLastFrameUs;

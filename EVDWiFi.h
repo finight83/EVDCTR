@@ -16,8 +16,8 @@ WiFiUDP discoveryUdp;
 // Owned by EVDOTA.h, which is included later in the chain (it needs the HTTP
 // server that EVDRoutes.h owns). Declared here because the WiFi-settings guard
 // reads them.
-extern volatile bool otaInProgress;
-extern volatile bool otaUploadInProgress;
+extern bool otaInProgress;
+extern bool otaUploadInProgress;
 
 inline void loadWiFiSettings() {
   PrefsGuard g("evdctr", true);
@@ -212,10 +212,10 @@ inline void handleRestart(AsyncWebServerRequest *request) {
 }
 
 // ---- Network test ----------------------------------------------------------
-volatile bool     netTestRunning = false;
-volatile bool     netTestDone    = false;
-volatile bool     netTestOk      = false;
-volatile uint32_t netTestMs      = 0;
+bool     netTestRunning = false;
+bool     netTestDone    = false;
+bool     netTestOk      = false;
+uint32_t netTestMs      = 0;
 
 inline void networkTestTask(void *) {
   netTestRunning = true;
@@ -261,7 +261,7 @@ inline void handleNetworkTestStatus(AsyncWebServerRequest *request) {
 }
 
 // ---- WiFi scan -------------------------------------------------------------
-volatile bool scanRunning = false;
+bool scanRunning = false;
 String        scanJson    = "[]";
 
 inline void wifiScanTask(void *) {
@@ -362,8 +362,8 @@ static unsigned long gLastProbeMs = 0;
 static bool          gProbeReplySeen = false;
 // Published for the dashboard: how many probes we have broadcast since boot,
 // and whether auto-pairing is what filled strHost in (vs. typed by an operator).
-volatile uint32_t statDiscoveryProbes = 0;
-volatile bool     gAutoPaired        = false;
+uint32_t statDiscoveryProbes = 0;
+bool     gAutoPaired        = false;
 
 // Both live in EVDDownlink.h, which is included after this file because it
 // needs the WiFi state defined here.
