@@ -47,6 +47,9 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
   .row>*{flex:1 1 auto}
   .muted{color:var(--muted)}
   .num{font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:.72rem;text-transform:uppercase}
   .card.wide{grid-column:1/-1}
   .linkrow{display:flex;flex-wrap:wrap;gap:10px}
   .linkbox{flex:1 1 110px;background:#09090c;border:1px solid var(--line);
@@ -190,8 +193,8 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
         <div id="pairstat" class="muted" style="margin-top:8px"></div>
       </div>
       <div class="card"><h3>Stream state (from EVDSTR)</h3><div id="strlive"></div></div>
-      <div class="card"><h3>Players</h3><pre id="players">-</pre></div>
-      <div class="card"><h3>Zones</h3><pre id="zones">-</pre></div>
+      <div class="card"><h3>Players</h3><div id="players" class="muted">press Refresh</div></div>
+      <div class="card"><h3>Zones</h3><div id="zones" class="muted">press Refresh</div></div>
       <div class="card">
         <h3>Buffer latency</h3>
         <label>Player buffer <span class="muted num" id="bufv"></span> ms</label>
@@ -554,10 +557,50 @@ on('#pair', 'click', async () => {
     if (!r.ok) err('pairing failed: ' + (r.error || 'no answer'));
   } catch (e) { err(e); }
 });
+// The STR is where zones and players live; this board only displays what it
+// relays. Show each node's room (or "Discovered (muted)") so the split-server
+// dashboard agrees with the streamer's own Players table.
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderStreamInfo(players, zones) {
+  const pl = Array.isArray(players) ? players : [];
+  const zl = Array.isArray(zones) ? zones : [];
+  const roomOf = {};
+  zl.forEach(z => (z.nodes || []).forEach(ip => { roomOf[ip] = z.name || z.id; }));
+
+  const disc = pl.filter(x => !(x.assigned || roomOf[x.ip])).length;
+  const rows = pl.map(x => {
+    const room = roomOf[x.ip]
+      ? esc(roomOf[x.ip])
+      : '<span class="muted">Discovered (muted)</span>';
+    return '<tr><td>' + esc(x.name) + '</td><td>' + esc(x.ip) + '</td>' +
+           '<td>' + esc(x.version || '-') + '</td><td>' + room + '</td></tr>';
+  }).join('');
+  $('#players').innerHTML = pl.length
+    ? '<table><thead><tr><th>Name</th><th>IP</th><th>Ver</th><th>Room</th></tr></thead><tbody>' +
+      rows + '</tbody></table>' +
+      (disc ? '<p class="muted" style="margin-top:8px">' + disc +
+              ' discovered (muted until assigned on EVDSTR)</p>' : '')
+    : '<p class="muted">no players</p>';
+
+  const zrows = zl.map(z => '<tr><td>' + esc(z.name || z.id) + '</td><td>' +
+    esc(z.volume) + '%</td><td>' + (z.muted ? 'muted' : '-') + '</td><td>' +
+    (((z.nodes && z.nodes.length) || 0)) + '</td></tr>').join('');
+  $('#zones').innerHTML = zl.length
+    ? '<table><thead><tr><th>Room</th><th>Vol</th><th>Mute</th><th>Nodes</th></tr></thead><tbody>' +
+      zrows + '</tbody></table>'
+    : '<p class="muted">no rooms</p>';
+}
+
 on('#refresh', 'click', async () => {
   try {
-    $('#players').textContent = JSON.stringify(await j('/api/link/players'), null, 1);
-    $('#zones').textContent = JSON.stringify(await j('/api/link/zones'), null, 1);
+    const players = await j('/api/link/players');
+    const zones   = await j('/api/link/zones');
+    if (!Array.isArray(players) || !Array.isArray(zones)) {
+      err('EVDSTR returned no player/room list (unpaired or unreachable)');
+    }
+    renderStreamInfo(players, zones);
   } catch (e) { err('EVDSTR unreachable: ' + e.message); }
 });
 on('#buf', 'input', e => $('#bufv').textContent = e.target.value);
