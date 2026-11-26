@@ -195,6 +195,7 @@ static const char EVDCTRL_HTML[] PROGMEM = R"HTML(
       <div class="card"><h3>Stream state (from EVDSTR)</h3><div id="strlive"></div></div>
       <div class="card"><h3>Players</h3><div id="players" class="muted">press Refresh</div></div>
       <div class="card"><h3>Zones</h3><div id="zones" class="muted">press Refresh</div></div>
+      <div class="card"><h3>Servers (from EVDSTR)</h3><div id="servers" class="muted">press Refresh</div></div>
       <div class="card">
         <h3>Buffer latency</h3>
         <label>Player buffer <span class="muted num" id="bufv"></span> ms</label>
@@ -593,14 +594,40 @@ function renderStreamInfo(players, zones) {
     : '<p class="muted">no rooms</p>';
 }
 
+// [servers-decide] The election runs on EVDSTR; this board displays what it
+// relays. Priority is changed on the EVDSTR dashboard (drag the Servers list).
+function renderServersInfo(srv) {
+  const j = (srv && typeof srv === 'object') ? srv : {};
+  const list = Array.isArray(j.servers) ? j.servers : [];
+  const isLeader = j.peerRole === 'leader';
+  const leader = list.find(x => x.id === j.leaderId) || null;
+  const head = list.length
+    ? '<p><span class="pill ' + (isLeader ? 'ok' : 'warn') + '">' +
+        (isLeader ? 'LEADER' : 'standby') + '</span> leader: ' +
+        esc(leader ? (leader.name || leader.id) : '?') + '</p>'
+    : '<p class="muted">no server list (EVDSTR unreachable or not P3)</p>';
+  const rows = list.map(sv => '<tr><td>' + esc(sv.name || sv.id) + '</td><td>' +
+    esc(sv.ip) + '</td><td>' + esc(sv.priority) + '</td><td>' +
+    (sv.id === j.leaderId ? 'leader' : (sv.alive === false ? 'down' : '-')) +
+    '</td></tr>').join('');
+  $('#servers').innerHTML = head +
+    (list.length
+      ? '<table><thead><tr><th>Name</th><th>IP</th><th>Prio</th><th>State</th></tr></thead><tbody>' +
+        rows + '</tbody></table>'
+      : '') +
+    '<p class="muted" style="margin-top:8px;font-size:.78rem">Priority is set on the EVDSTR dashboard (drag the Servers list).</p>';
+}
+
 on('#refresh', 'click', async () => {
   try {
     const players = await j('/api/link/players');
     const zones   = await j('/api/link/zones');
+    const servers = await j('/api/link/servers');
     if (!Array.isArray(players) || !Array.isArray(zones)) {
       err('EVDSTR returned no player/room list (unpaired or unreachable)');
     }
     renderStreamInfo(players, zones);
+    renderServersInfo(servers);
   } catch (e) { err('EVDSTR unreachable: ' + e.message); }
 });
 on('#buf', 'input', e => $('#bufv').textContent = e.target.value);

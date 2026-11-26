@@ -1,9 +1,11 @@
 // ---- Versioning ------------------------------------------------------------
 // Always update this field with latest patch updates
 #ifndef EVD_FW_VERSION
+// 1.1.0.0: dashboard-only - Stream tab relays and shows EVDSTR's peer
+//          election (Servers card: role, leader, priorities).
 // 1.0.0.1: dashboard-only - Stream tab shows players with their room or
-//           "Discovered (muted)" and the room list as a table.
-#define EVD_FW_VERSION "1.0.0.1"
+//          "Discovered (muted)" and the room list as a table.
+#define EVD_FW_VERSION "1.1.0.0"
 // EVDCTR: capture side of the split Enkelvoud server
 #endif
 #define FW_VERSION EVD_FW_VERSION

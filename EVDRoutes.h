@@ -473,6 +473,9 @@ inline void setup_http_server() {
   server.on("/api/link/zones",   HTTP_GET, [](AsyncWebServerRequest *req) {
     sendJson(req, downlinkZonesJson());
   });
+  server.on("/api/link/servers", HTTP_GET, [](AsyncWebServerRequest *req) {
+    sendJson(req, downlinkServersJson());
+  });
 
   // ---- encoder (local) ----
   server.on("/api/audio/encoding",          HTTP_GET,  handleGetAudioEncoding);

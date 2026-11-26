@@ -185,6 +185,15 @@ inline String downlinkZonesJson() {
   return "[]";
 }
 
+// [servers-decide] The peer election runs on EVDSTR; this board only relays
+// its state for display. It is a JSON object (not a list like players/zones).
+inline String downlinkServersJson() {
+  if (!strHost.length()) return "{\"ok\":false,\"downlink\":false}";
+  String out; int code = 0;
+  if (downlinkRequest("GET", "/api/servers", "", out, code)) return out;
+  return "{\"ok\":false,\"downlink\":false}";
+}
+
 // ---- Pairing ---------------------------------------------------------------
 // The Stream tab posts {"host":"192.168.1.42"} here. We prove the address
 // before keeping it: a wrong IP that accepts a TCP connection but answers
